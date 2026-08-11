@@ -1,0 +1,79 @@
+// Arithmetic grammar with semantic evaluation expressed entirely as JSON Logic.
+
+grammar Arithmetic;
+start expression;
+
+token WS pattern "\\s+" skip;
+token Number pattern "\\d+(?:\\.\\d+)?";
+token Plus literal "+";
+token Minus literal "-";
+token Mult literal "*";
+token Div literal "/";
+token LParen literal "(";
+token RParen literal ")";
+
+rule expression = seq(
+  label(head, subrule(term)),
+  label(tail, many(seq(
+    label(op, alt(consume(Plus), consume(Minus))),
+    label(operand, subrule(term)),
+    action([{"val":["op","image"]},{"val":"operand"}])
+  ))),
+  action({
+    "reduce":[
+      {"val":"tail"},
+      {"if":[
+        {"===":[{"val":["current",0]},"+"]},
+        {"+":[{"val":"accumulator"},{"val":["current",1]}]},
+        {"===":[{"val":["current",0]},"-"]},
+        {"-":[{"val":"accumulator"},{"val":["current",1]}]},
+        {"===":[{"val":["current",0]},"*"]},
+        {"*":[{"val":"accumulator"},{"val":["current",1]}]},
+        {"/":[{"val":"accumulator"},{"val":["current",1]}]}
+      ]},
+      {"val":"head"}
+    ]
+  })
+);
+
+rule term = seq(
+  label(head, subrule(factor)),
+  label(tail, many(seq(
+    label(op, alt(consume(Mult), consume(Div))),
+    label(operand, subrule(factor)),
+    action([{"val":["op","image"]},{"val":"operand"}])
+  ))),
+  action({
+    "reduce":[
+      {"val":"tail"},
+      {"if":[
+        {"===":[{"val":["current",0]},"+"]},
+        {"+":[{"val":"accumulator"},{"val":["current",1]}]},
+        {"===":[{"val":["current",0]},"-"]},
+        {"-":[{"val":"accumulator"},{"val":["current",1]}]},
+        {"===":[{"val":["current",0]},"*"]},
+        {"*":[{"val":"accumulator"},{"val":["current",1]}]},
+        {"/":[{"val":"accumulator"},{"val":["current",1]}]}
+      ]},
+      {"val":"head"}
+    ]
+  })
+);
+
+rule factor = alt(
+  seq(
+    consume(Minus),
+    label(value, subrule(factor)),
+    action({"*":[-1,{"val":"value"}]})
+  ),
+  seq(
+    consume(LParen),
+    label(value, subrule(expression)),
+    consume(RParen),
+    action({"val":"value"})
+  ),
+  seq(
+    label(n, consume(Number)),
+    action({"+":[{"val":["n","image"]},0]})
+  )
+);

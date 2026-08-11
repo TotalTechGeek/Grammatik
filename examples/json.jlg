@@ -1,0 +1,54 @@
+// Complete JSON grammar. Its actions decode literals and construct JSON values.
+
+grammar JSON;
+start value;
+
+token WS pattern "[ \\t\\r\\n]+" skip;
+token String pattern "\"(?:[^\"\\\\\\u0000-\\u001f]|\\\\(?:[\"\\\\/bfnrt]|u[0-9a-fA-F]{4}))*\"";
+token Number pattern "-?(?:0|[1-9]\\d*)(?:\\.\\d+)?(?:[eE][+-]?\\d+)?";
+token True literal "true";
+token False literal "false";
+token Null literal "null";
+token LCurly literal "{";
+token RCurly literal "}";
+token LSquare literal "[";
+token RSquare literal "]";
+token Comma literal ",";
+token Colon literal ":";
+
+rule value = alt(
+  subrule(object),
+  subrule(array),
+  seq(
+    label(s, consume(String)),
+    action({"unquote":{"val":["s","image"]}})
+  ),
+  seq(
+    label(n, consume(Number)),
+    action({"num":{"val":["n","image"]}})
+  ),
+  seq(consume(True), action(true)),
+  seq(consume(False), action(false)),
+  seq(consume(Null), action(null))
+);
+
+rule object = seq(
+  consume(LCurly),
+  label(pairs, manySep(subrule(pair), Comma)),
+  consume(RCurly),
+  action({"fromPairs":{"val":"pairs"}})
+);
+
+rule pair = seq(
+  label(k, consume(String)),
+  consume(Colon),
+  label(v, subrule(value)),
+  action([{"unquote":{"val":["k","image"]}},{"val":"v"}])
+);
+
+rule array = seq(
+  consume(LSquare),
+  label(items, manySep(subrule(value), Comma)),
+  consume(RSquare),
+  action({"val":"items"})
+);

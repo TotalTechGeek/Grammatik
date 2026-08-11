@@ -1,0 +1,141 @@
+// @ts-check
+'use strict'
+
+/**
+ * The formula grammar against the two hand-written parsers for the same
+ * language: the Peggy-generated one this project's grammar was ported from, and
+ * a Chevrotain implementation of it.
+ *
+ * All four emit JSON Logic, and agreement is asserted on every sample before
+ * anything is timed — a fast wrong answer is not a benchmark result.
+ *
+ * Methodology: interleaved rounds with a rotating start order, reporting the
+ * median. Interleaving matters here. Timing implementations one after another in
+ * a single process gave order-dependent results elsewhere in this repo, badly
+ * enough to invent and hide regressions; rotating the order spreads any such
+ * effect across every entrant instead of concentrating it on whoever runs last.
+ *
+ * Run: node bench/formula.js
+ */
+
+import assert from 'node:assert/strict'
+
+import { createFormulaParser } from '../examples/formula.js'
+import { compile as compilePeggy } from '../../formulas/src/compile.js'
+import { compileChevrotain } from '../../formulas/src/grammar.chevrotain.js'
+
+const options = {
+  functions: new Set(['SUM', 'IF', 'ABS', 'MAX', 'ROUND']),
+  unaryFunctions: new Set(['ABS'])
+}
+
+const samples = [
+  '=1 + 2 * 3',
+  'IF(A1>=10,SUM(B1:B5),ABS(C1))',
+  'items[*].price * items[*].quantity',
+  '"Total: " & ROUND(subtotal * 1.0825, 2)',
+  "'Quarter 1'!$B$2 + MAX({1,2;3,4})",
+  'a[*].b[*].c & root[0]["suffix"]'
+]
+
+const longParts = new Array(30)
+for (let i = 0; i < longParts.length; i++) {
+  longParts[i] = `IF(A${i + 1}>=${i},SUM(B${i + 1}:B${i + 4}),ABS(items[${i}].total))`
+}
+const longSample = longParts.join(' + ')
+
+// Grammar analysis, planning and code generation happen once, at construction.
+// The timed functions only lex, parse, and run semantic actions.
+const compiled = createFormulaParser({ ...options, positions: 'offset' })
+const compiledFull = createFormulaParser({ ...options, positions: 'full' })
+const interpreted = createFormulaParser({ ...options, execution: 'interpreted', positions: 'offset' })
+
+const parsers = {
+  'jl-grammar (generated, offsets)': (source) => compiled.parse(source),
+  'jl-grammar (generated, full pos)': (source) => compiledFull.parse(source),
+  'jl-grammar (interpreted, no eval)': (source) => interpreted.parse(source),
+  'formulas: Peggy (generated)': (source) => compilePeggy(source, options),
+  'formulas: Chevrotain': (source) => compileChevrotain(source, options)
+}
+
+const names = Object.keys(parsers)
+
+function assertAgreement () {
+  for (const source of [...samples, longSample]) {
+    const expected = parsers[names[0]](source)
+    for (let i = 1; i < names.length; i++) {
+      assert.deepStrictEqual(parsers[names[i]](source), expected, `${names[i]} disagreed on: ${source}`)
+    }
+  }
+}
+
+function median (values) {
+  const sorted = [...values].sort((a, b) => a - b)
+  return sorted[sorted.length >> 1]
+}
+
+function measure (selectInput, iterations, rounds) {
+  const measurements = {}
+  for (const name of names) measurements[name] = []
+
+  const warmup = Math.min(iterations, 5000)
+  for (const name of names) {
+    const parse = parsers[name]
+    for (let i = 0; i < warmup; i++) parse(selectInput(i))
+  }
+
+  for (let round = 0; round < rounds; round++) {
+    for (let offset = 0; offset < names.length; offset++) {
+      // Rotate which implementation goes first on each round.
+      const name = names[(offset + round) % names.length]
+      const parse = parsers[name]
+      const started = process.hrtime.bigint()
+      for (let i = 0; i < iterations; i++) parse(selectInput(i))
+      measurements[name].push(Number(process.hrtime.bigint() - started) / iterations)
+    }
+  }
+
+  return names.map((name) => ({ name, nanoseconds: median(measurements[name]) }))
+}
+
+function report (title, results, baselineName) {
+  const baseline = results.find((r) => r.name === baselineName)
+  const width = Math.max(...results.map((r) => r.name.length))
+  const ranked = [...results].sort((a, b) => a.nanoseconds - b.nanoseconds)
+
+  console.log(`\n${title}`)
+  console.log('-'.repeat(title.length))
+  for (const result of ranked) {
+    const ops = 1e9 / result.nanoseconds
+    console.log(
+      `  ${result.name.padEnd(width)}  ` +
+      `${ops.toLocaleString('en-US', { maximumFractionDigits: 0 }).padStart(9)} ops/s  ` +
+      `${result.nanoseconds.toFixed(0).padStart(8)} ns/op  ` +
+      `${(baseline.nanoseconds / result.nanoseconds).toFixed(2).padStart(5)}x`
+    )
+  }
+  console.log(`  (relative to ${baselineName})`)
+}
+
+assertAgreement()
+
+const rounds = Number.parseInt(process.env.BENCH_ROUNDS || '5', 10)
+const shortIterations = Number.parseInt(process.env.BENCH_ITERATIONS || '30000', 10)
+const longIterations = Number.parseInt(process.env.BENCH_LONG_ITERATIONS || '500', 10)
+
+console.log(`node ${process.version}; median of ${rounds} interleaved rounds`)
+console.log('all five emit deep-equal JSON Logic; timed work is lex + parse + semantic value')
+
+report(
+  `${samples.length} rotating formulas (${shortIterations.toLocaleString()} iterations/round)`,
+  measure((index) => samples[index % samples.length], shortIterations, rounds),
+  'formulas: Chevrotain'
+)
+
+report(
+  `${longSample.length.toLocaleString()}-character formula (${longIterations.toLocaleString()} iterations/round)`,
+  measure(() => longSample, longIterations, rounds),
+  'formulas: Chevrotain'
+)
+
+console.log()

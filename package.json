@@ -1,0 +1,39 @@
+{
+  "name": "jl-grammar",
+  "version": "0.1.0",
+  "description": "A Chevrotain-like parsing toolkit whose grammars are JSON Logic, executed by json-logic-engine.",
+  "type": "module",
+  "main": "./src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./runtime": "./src/runtime.js"
+  },
+  "scripts": {
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "bench": "node bench/bench.js",
+    "bench:compare": "node bench/compare-codex.js",
+    "bench:formula": "node bench/formula.js",
+    "test:csp": "node --disallow-code-generation-from-strings scripts/check-no-eval.mjs",
+    "generate": "node bin/jl-grammar.js generate",
+    "bench:generated": "node bench/generate-formula.js && node bench/generated.js"
+  },
+  "keywords": [
+    "json-logic",
+    "parser",
+    "grammar",
+    "chevrotain",
+    "peg"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "json-logic-engine": "^5.0.7"
+  },
+  "devDependencies": {
+    "chevrotain": "^11.0.3",
+    "vitest": "^3.2.4"
+  },
+  "bin": {
+    "jl-grammar": "./bin/jl-grammar.js"
+  }
+}

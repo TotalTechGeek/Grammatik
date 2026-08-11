@@ -1,0 +1,231 @@
+// Sheetlang, written in the grammar-definition language (see src/definition.js).
+// Every action is JSON Logic data; this file contains no executable JavaScript.
+
+grammar Sheetlang;
+start Formula;
+
+token Whitespace pattern "[ \\t\\r\\n]+" skip;
+token String pattern "\"(?:\"\"|[^\"])*\"";
+token QuotedName pattern "'(?:''|[^'])*'";
+token Error pattern "#(?:NULL!|DIV/0!|VALUE!|REF!|NAME\\?|NUM!|N/A)";
+token Boolean pattern "(?:TRUE|FALSE)(?![A-Za-z0-9_])" ignoreCase;
+token Number pattern "(?:[0-9]+(?:\\.[0-9]*)?|\\.[0-9]+)(?:[eE][+-]?[0-9]+)?";
+token BracketedName pattern "\\[[A-Za-z_][^\\]]*\\]";
+token AnchoredCell pattern "(?:\\$[A-Za-z]+\\$?[0-9]+|[A-Za-z]+\\$[0-9]+)";
+token Cell pattern "[A-Za-z]+[0-9]+";
+token Identifier pattern "[A-Za-z_][A-Za-z0-9_]*";
+token LessEqual literal "<=";
+token GreaterEqual literal ">=";
+token NotEqual literal "<>";
+token Less literal "<";
+token Greater literal ">";
+token Equals literal "=";
+token Plus literal "+";
+token Minus literal "-";
+token Multiply literal "*";
+token Divide literal "/";
+token Power literal "^";
+token Ampersand literal "&";
+token Percent literal "%";
+token LParen literal "(";
+token RParen literal ")";
+token LBrace literal "{";
+token RBrace literal "}";
+token LBracket literal "[";
+token RBracket literal "]";
+token Comma literal ",";
+token Semicolon literal ";";
+token Colon literal ":";
+token Bang literal "!";
+token Dot literal ".";
+
+rule Formula = seq(
+  option(consume(Equals)),
+  label(expression, subrule(Expression)),
+  action({"val":"expression"})
+);
+
+rule Expression = subrule(Comparison);
+
+rule Comparison = infixLeft(
+  subrule(Concatenation),
+  subrule(ComparisonOperator),
+  action({"formula.binary":[{"val":"op"},{"val":"left"},{"val":"right"}]})
+);
+
+rule ComparisonOperator = seq(
+  label("token", alt(
+    consume(LessEqual), consume(GreaterEqual), consume(NotEqual),
+    consume(Less), consume(Greater), consume(Equals)
+  )),
+  action({"formula.operator":{"val":["token","image"]}})
+);
+
+rule Concatenation = infixLeft(
+  subrule(Additive),
+  consume(Ampersand),
+  action({"formula.concat2":[{"val":"left"},{"val":"right"}]})
+);
+
+rule Additive = infixLeft(
+  subrule(Multiplicative),
+  alt(consume(Plus), consume(Minus)),
+  action({"formula.binary":[{"val":["op","image"]},{"val":"left"},{"val":"right"}]})
+);
+
+rule Multiplicative = infixLeft(
+  subrule(Exponent),
+  alt(consume(Multiply), consume(Divide)),
+  action({"formula.binary":[{"val":["op","image"]},{"val":"left"},{"val":"right"}]})
+);
+
+rule Exponent = infixLeft(
+  subrule(Unary),
+  consume(Power),
+  action({"formula.power2":[{"val":"left"},{"val":"right"}]})
+);
+
+rule Unary = prefix(
+  alt(consume(Minus), consume(Plus)),
+  subrule(Postfix),
+  action({"formula.unary":[{"val":["op","image"]},{"val":"operand"}]})
+);
+
+rule Postfix = postfix(
+  subrule(Primary),
+  consume(Percent),
+  action({"formula.percent":{"val":"left"}})
+);
+
+rule Primary = alt(
+  between(consume(LParen), subrule(Expression), consume(RParen)),
+  subrule(ArrayLiteral),
+  subrule(ErrorLiteral),
+  subrule(NumberLiteral),
+  subrule(StringLiteral),
+  subrule(FunctionCall),
+  subrule(BooleanLiteral),
+  subrule(Reference)
+);
+
+rule FunctionCall = seq(
+  label(name, subrule(FunctionName)),
+  consume(LParen),
+  label(args, subrule(ArgumentList)),
+  consume(RParen),
+  action({"formula.call":[{"val":"name"},{"val":"args"}]})
+);
+
+rule FunctionName = seq(
+  label(head, subrule(Name)),
+  label(tail, many(seq(
+    consume(Dot), label(name, subrule(Name)), action({"val":"name"})
+  ))),
+  action({"formula.functionName":[{"val":"head"},{"val":"tail"}]})
+);
+
+rule ArgumentList = seq(
+  label(head, option(subrule(Expression))),
+  label(tail, many(seq(
+    consume(Comma), label(arg, option(subrule(Expression))), action({"val":"arg"})
+  ))),
+  action({"formula.arguments":[{"val":"head"},{"val":"tail"}]})
+);
+
+rule NumberLiteral = as(consume(Number), action({"formula.number":{"val":"image"}}));
+
+rule StringLiteral = as(consume(String), action({"formula.string":{"val":"image"}}));
+
+rule BooleanLiteral = as(consume(Boolean), action({"formula.boolean":{"val":"image"}}));
+
+rule ErrorLiteral = as(consume(Error), action({"formula.error":{"val":"image"}}));
+
+rule ArrayLiteral = seq(
+  consume(LBrace), label(rows, subrule(ArrayRows)), consume(RBrace),
+  action({"formula.array":{"val":"rows"}})
+);
+
+rule ArrayRows = seq(
+  label(head, subrule(ArrayRow)),
+  label(tail, many(seq(
+    consume(Semicolon), label(row, subrule(ArrayRow)), action({"val":"row"})
+  ))),
+  action({"formula.list":[{"val":"head"},{"val":"tail"}]})
+);
+
+rule ArrayRow = seq(
+  label(head, subrule(ArrayElement)),
+  label(tail, many(seq(
+    consume(Comma), label(element, subrule(ArrayElement)), action({"val":"element"})
+  ))),
+  action({"formula.list":[{"val":"head"},{"val":"tail"}]})
+);
+
+rule ArrayElement = alt(
+  seq(
+    consume(Minus), label(number, subrule(NumberLiteral)),
+    action({"formula.negativeNumber":{"val":"number"}})
+  ),
+  subrule(NumberLiteral),
+  subrule(StringLiteral),
+  subrule(BooleanLiteral)
+);
+
+rule Reference = alt(
+  seq(
+    label(scope, option(subrule(ScopePrefix))),
+    label("start", subrule(CellReference)),
+    consume(Colon),
+    label(end, subrule(CellReference)),
+    action({"formula.range":[{"val":"scope"},{"val":"start"},{"val":"end"}]})
+  ),
+  seq(
+    label(scope, option(subrule(ScopePrefix))),
+    label(address, subrule(AnchoredReference)),
+    action({"formula.directReference":[{"val":"scope"},{"val":"address"}]})
+  ),
+  seq(
+    label(scope, subrule(ScopePrefix)),
+    label(path, subrule(Path)),
+    action({"formula.scopedPath":[{"val":"scope"},{"val":"path"}]})
+  ),
+  seq(
+    label(path, subrule(Path)),
+    action({"formula.pathReference":{"val":"path"}})
+  )
+);
+
+rule AnchoredReference = as(consume(AnchoredCell), action({"formula.cell":{"val":"image"}}));
+
+rule ScopePrefix = seq(
+  label(name, alt(subrule(QuotedName), subrule(Name))),
+  consume(Bang),
+  action({"formula.scope":{"val":"name"}})
+);
+
+rule QuotedName = as(consume(QuotedName), action({"formula.quotedName":{"val":"image"}}));
+
+rule CellReference = as(alt(consume(AnchoredCell), consume(Cell)), action({"formula.cell":{"val":"image"}}));
+
+rule Path = seq(
+  label(head, subrule(PathRoot)),
+  label(tail, many(subrule(PathSegment))),
+  action({"formula.path":[{"val":"head"},{"val":"tail"}]})
+);
+
+rule PathRoot = alt(
+  as(consume(BracketedName), action({"formula.bracketedName":{"val":"image"}})),
+  subrule(Name)
+);
+
+rule PathSegment = alt(
+  seq(consume(Dot), label(name, subrule(Name)), action({"val":"name"})),
+  seq(
+    consume(LBracket), consume(Multiply), consume(RBracket),
+    action({"formula.wildcard":[]})
+  ),
+  between(consume(LBracket), subrule(NumberLiteral), consume(RBracket)),
+  between(consume(LBracket), subrule(StringLiteral), consume(RBracket))
+);
+
+rule Name = alt(consume(Identifier), consume(Cell));

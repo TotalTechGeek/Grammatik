@@ -11,9 +11,32 @@
  * is read as a grammar object directly.
  */
 
-import { readFile, writeFile } from 'node:fs/promises'
+import { readFile, writeFile, unlink } from 'node:fs/promises'
 import path from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { parseDefinition, emitModule } from '../src/index.js'
+
+/**
+ * Resolves a grammar's `methods { ... }` block to real functions.
+ *
+ * The block is written out as a module beside the grammar and imported, rather
+ * than evaluated with `new Function`, so its relative imports resolve the way
+ * the author wrote them. The functions are only used to compile the grammar's
+ * actions to source; the block itself is emitted verbatim.
+ */
+async function loadMethodsBlock (block, grammarPath) {
+  const file = path.join(
+    path.dirname(path.resolve(grammarPath)),
+    `.jl-grammar-methods-${process.pid}-${Date.now()}.mjs`
+  )
+  await writeFile(file, block)
+  try {
+    const loaded = await import(pathToFileURL(file).href)
+    return loaded.default || loaded
+  } finally {
+    await unlink(file).catch(() => {})
+  }
+}
 
 const USAGE = `Usage: jl-grammar generate <grammar.jlg|grammar.json> [options]
 
@@ -65,6 +88,8 @@ let methods
 if (flags.methods) {
   const loaded = await import(path.resolve(flags.methods))
   methods = typeof loaded.default === 'function' ? loaded.default() : loaded.default || loaded
+} else if (grammar.methodsBlock !== undefined) {
+  methods = await loadMethodsBlock(grammar.methodsBlock, input)
 }
 
 const output = emitModule(grammar, {

@@ -42,6 +42,8 @@ export interface GrammarSpec {
   start: string
   /** Recorded in a generated file's header; also the default `moduleName`. */
   name?: string
+  /** A .jlg file's `methods { ... }` block, as source. */
+  methodsBlock?: string
 }
 
 export type ExecutionMode = 'generated' | 'interpreted'
@@ -122,6 +124,8 @@ export interface EmitOptions extends ParserOptions {
   runtimeSpecifier?: string
   /** What the file imports the engine from, when it still needs one. */
   engineSpecifier?: string
+  /** Overrides the block carried on the grammar. */
+  methodsBlock?: string
 }
 
 /**
@@ -140,6 +144,21 @@ export declare const definitionGrammar: GrammarSpec
 export declare const definitionTokens: TokenDef[]
 export declare const definitionRules: Record<string, Parser>
 export declare const CONSTRUCTOR_NAMES: string[]
+
+/** Separates a trailing `methods { ... }` block from the grammar text. */
+export declare function splitMethodsBlock (source: string): { grammar: string, block: string | null }
+
+export declare function analyzeMethodsBlock (body: string): {
+  names: string[]
+  hasDefault: boolean
+  imports: string[]
+}
+
+/** Evaluates a block to its methods table. Needs `new Function`; no imports. */
+export declare function evaluateMethodsBlock (body: string): {
+  methods: Record<string, any>
+  exports: Record<string, any>
+}
 
 /** Every combinator name, e.g. `seq`, `alt`, `infixLeft`. */
 export declare const OPERATORS: string[]

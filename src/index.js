@@ -10,4 +10,5 @@ export {
   createDefinitionParser, parseDefinition, createParserFromSource
 } from './definition.js'
 export { emitModule } from './emit.js'
+export { splitMethodsBlock, analyzeMethodsBlock, evaluateMethodsBlock } from './methodsblock.js'
 export { FAIL, ParseError, createState } from './state.js'

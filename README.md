@@ -159,6 +159,46 @@ parser.parse('1 + 2 + 3')                    // 6
 Every constructor corresponds to one operator above. The language is itself
 defined by a grammar in this format, and parsed by this library.
 
+### Carrying the methods with the grammar
+
+Actions name methods, and those methods have to be real functions somewhere. A
+`.jlg` file can hold them itself, in a `methods { ... }` block at the end:
+
+```
+rule sum = infixLeft(
+  as(consume(Int), action({"number": {"val": "image"}})),
+  consume(Plus),
+  action({"add": [{"val": "left"}, {"val": "right"}]})
+);
+
+methods {
+  export const number = { method: (image) => Number.parseFloat(image), optimizeUnary: true }
+  export const add = ([left, right]) => left + right
+}
+```
+
+The block is a module body: its default export is the methods table, or, with no
+default export, its named exports become the table. It is separated from the
+source before the definition language sees it, so `parseDefinition` returns the
+same JSON-serializable grammar it always did, with the block alongside as an
+opaque string — a grammar with a block is still data.
+
+`emitModule` writes the block into the generated parser as source and registers
+it there, so importing the file is all the wiring there is. The block's named
+exports are re-exported by the parser too, which is how a grammar can ship a
+helper its host needs.
+
+```js
+import { parse } from './parser.js'   // no registerMethods call
+parse('1 + 2 + 3')                    // 6
+```
+
+`createParserFromSource` evaluates the block with `new Function`, so a block is
+the one part of a `.jlg` that needs `eval` at run time — and a block that
+`import`s cannot be evaluated that way at all. Both are build-time features:
+`jl-grammar generate` resolves an importing block as a real module, and the
+emitted file only ever contains it as source.
+
 ## API
 
 | | |
@@ -167,6 +207,8 @@ defined by a grammar in this format, and parsed by this library.
 | `parseDefinition(source, options?)` | Definition source to a grammar object. |
 | `createParserFromSource(source, options?)` | Definition source straight to a parser. |
 | `createDefinitionParser(options?)` | A parser for the definition language itself. |
+| `splitMethodsBlock(source)` | Definition source to `{ grammar, block }`. |
+| `evaluateMethodsBlock(body)` | A block to its methods table. Needs `new Function`. |
 | `emitModule(spec, options?)` | Write a grammar out as a JavaScript module. |
 | `createLexer(defs, options?)` | The lexer on its own. |
 | `analyze(rules, options?)` | FIRST sets, nullability, left recursion, validation errors. |
@@ -303,6 +345,7 @@ src/plan.js       Specializes a grammar into closures
 src/codegen.js    Generates a JavaScript function per rule
 src/emit.js       Writes a grammar out as a module
 src/definition.js The grammar-definition language
+src/methodsblock.js The `methods { ... }` block a .jlg can carry
 src/parser.js     createParser
 src/runtime.js    The surface a generated module imports
 types/            Hand-written declarations, copied to dist/types by the build

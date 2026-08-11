@@ -1,4 +1,5 @@
 import { createParser } from './parser.js'
+import { splitMethodsBlock, evaluateMethodsBlock } from './methodsblock.js'
 
 /**
  * The grammar-definition language: a small surface syntax for the same grammars
@@ -242,17 +243,34 @@ export const createDefinitionParser = (options = {}) =>
  * Parses definition source into a grammar object — plain data, safe to
  * `JSON.stringify` and hand to `createParser`.
  *
+ * A trailing `methods { ... }` block is separated out before the language sees
+ * the source and carried on the result as `methodsBlock`, an opaque string. The
+ * grammar itself is unchanged by its presence.
+ *
  * @param {string} source
  * @param {object} [options] Passed to the definition parser itself.
  */
-export const parseDefinition = (source, options = {}) =>
-  createDefinitionParser(options).parse(source)
+export function parseDefinition (source, options = {}) {
+  const { grammar: text, block } = splitMethodsBlock(source)
+  const grammar = createDefinitionParser(options).parse(text)
+  if (block !== null) grammar.methodsBlock = block
+  return grammar
+}
 
 /**
  * Definition source straight to a working parser.
  *
+ * A `methods` block is evaluated here, which needs `new Function`. Explicit
+ * `options.methods` win over it, and a block that imports has to go through
+ * `emitModule` or the CLI instead — see `evaluateMethodsBlock`.
+ *
  * @param {string} source
  * @param {object} [options] Passed to `createParser` for the resulting grammar.
  */
-export const createParserFromSource = (source, options = {}) =>
-  createParser(parseDefinition(source, { execution: options.execution }), options)
+export function createParserFromSource (source, options = {}) {
+  const grammar = parseDefinition(source, { execution: options.execution })
+  if (grammar.methodsBlock === undefined || options.methods) return createParser(grammar, options)
+
+  const { methods } = evaluateMethodsBlock(grammar.methodsBlock)
+  return createParser(grammar, { ...options, methods })
+}

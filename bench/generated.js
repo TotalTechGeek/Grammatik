@@ -21,7 +21,7 @@ import assert from 'node:assert/strict'
 import { createParser } from '../src/index.js'
 import { grammar as formulaGrammar, createFormulaMethods } from '../examples/formula.js'
 import * as peggy from '../.generated/peggy-parser.js'
-import { compileChevrotain } from '../../formulas/src/grammar.chevrotain.js'
+import { compileChevrotain } from './chevrotain/grammar.js'
 import * as generated from '../.generated/formula-parser.js'
 
 const options = {

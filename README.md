@@ -273,14 +273,12 @@ deep-equal JSON Logic:
 ```
 
 `npm run bench` compares against Chevrotain on JSON; `npm run bench:formula` and
-`npm run bench:generated` run the comparisons above, generating the Peggy
-baseline from the grammar vendored under `bench/peggy` first. Every benchmark
-asserts all parsers produce identical output before timing anything, and each
-case runs in its own process.
-
-The Chevrotain entrant in the formula benchmarks lives in a sibling project, so
-those two only run on a machine that has it; `npm test`, `npm run test:csp` and
-`npm run bench` are self-contained.
+`npm run bench:generated` run the comparisons above. Both rivals live in this
+repository — the Peggy grammar under `bench/peggy`, generated as part of those
+scripts, and the hand-written Chevrotain parser under `bench/chevrotain` — so
+the numbers are reproducible from a clone. Every benchmark asserts all parsers
+produce identical output before timing anything, and each case runs in its own
+process.
 
 ## Development
 
@@ -309,6 +307,8 @@ src/parser.js     createParser
 src/runtime.js    The surface a generated module imports
 types/            Hand-written declarations, copied to dist/types by the build
 examples/         JSON, arithmetic and Excel-formula grammars, in both notations
+bench/peggy/      The Peggy grammar the formula benchmarks measure against
+bench/chevrotain/ The same formula grammar, hand-written with Chevrotain
 ```
 
 ## Licence

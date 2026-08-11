@@ -51,7 +51,7 @@
     "json-logic-engine": "^5.0.7"
   },
   "devDependencies": {
-    "chevrotain": "^11.0.3",
+    "chevrotain": "^13.2.0",
     "esbuild": "^0.28.2",
     "peggy": "^5.1.0",
     "vitest": "^3.2.4"

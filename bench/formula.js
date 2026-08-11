@@ -23,7 +23,7 @@ import assert from 'node:assert/strict'
 
 import { createFormulaParser } from '../examples/formula.js'
 import * as peggy from '../.generated/peggy-parser.js'
-import { compileChevrotain } from '../../formulas/src/grammar.chevrotain.js'
+import { compileChevrotain } from './chevrotain/grammar.js'
 
 const options = {
   functions: new Set(['SUM', 'IF', 'ABS', 'MAX', 'ROUND']),
@@ -56,7 +56,7 @@ const parsers = {
   'jl-grammar (generated, full pos)': (source) => compiledFull.parse(source),
   'jl-grammar (interpreted, no eval)': (source) => interpreted.parse(source),
   'Peggy (generated)': (source) => peggy.parse(source, options),
-  'formulas: Chevrotain': (source) => compileChevrotain(source, options)
+  'Chevrotain (hand-written)': (source) => compileChevrotain(source, options)
 }
 
 const names = Object.keys(parsers)
@@ -130,13 +130,13 @@ console.log('all five emit deep-equal JSON Logic; timed work is lex + parse + se
 report(
   `${samples.length} rotating formulas (${shortIterations.toLocaleString()} iterations/round)`,
   measure((index) => samples[index % samples.length], shortIterations, rounds),
-  'formulas: Chevrotain'
+  'Chevrotain (hand-written)'
 )
 
 report(
   `${longSample.length.toLocaleString()}-character formula (${longIterations.toLocaleString()} iterations/round)`,
   measure(() => longSample, longIterations, rounds),
-  'formulas: Chevrotain'
+  'Chevrotain (hand-written)'
 )
 
 console.log()

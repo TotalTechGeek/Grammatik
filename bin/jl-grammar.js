@@ -18,6 +18,7 @@ import { parseDefinition, emitModule } from '../src/index.js'
 const USAGE = `Usage: jl-grammar generate <grammar.jlg|grammar.json> [options]
 
   -o, --out <file>        Write here instead of stdout
+      --format <format>   esm (default) | cjs
       --execution <mode>  generated (default) | interpreted
       --positions <mode>  full (default) | offset
       --memo              Enable packrat memoization
@@ -42,6 +43,7 @@ let input = null
 for (let i = 1; i < args.length; i++) {
   const arg = args[i]
   if (arg === '-o' || arg === '--out') flags.out = args[++i]
+  else if (arg === '--format') flags.format = args[++i]
   else if (arg === '--execution') flags.execution = args[++i]
   else if (arg === '--positions') flags.positions = args[++i]
   else if (arg === '--max-steps') flags.maxSteps = Number(args[++i])
@@ -68,6 +70,7 @@ if (flags.methods) {
 const output = emitModule(grammar, {
   moduleName: name,
   methods,
+  format: flags.format,
   execution: flags.execution,
   positions: flags.positions,
   memo: flags.memo,
@@ -77,7 +80,7 @@ const output = emitModule(grammar, {
 
 if (flags.out) {
   await writeFile(flags.out, output)
-  const engineFree = !/^import .*json-logic-engine/m.test(output)
+  const engineFree = !/^(?:import|const) .*json-logic-engine/m.test(output)
   console.error(
     `wrote ${flags.out} (${output.length} bytes, ${Object.keys(grammar.rules).length} rules` +
     `${engineFree ? ', no json-logic-engine dependency' : ''})`

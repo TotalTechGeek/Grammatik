@@ -227,12 +227,18 @@ to emit — fall back to shipping as data, one at a time.
 ```
   -o, --out <file>        Write here instead of stdout
       --methods <file>    Module whose default export is the semantic methods
+      --format <format>   esm (default) | cjs
       --execution <mode>  generated (default) | interpreted
       --positions <mode>  full (default) | offset
       --memo              Enable packrat memoization
       --no-ll1            Force ordered backtracking
       --max-steps <n>     Runaway guard
 ```
+
+`--format cjs` emits the same parser as a CommonJS module — `require` for the
+imports, `module.exports` for the surface, and the named exports repeated under
+`default` so an `import parser from` still works. Nothing else about the file
+changes; the rules are the same source either way.
 
 ## Running without `eval`
 
@@ -267,17 +273,29 @@ deep-equal JSON Logic:
 ```
 
 `npm run bench` compares against Chevrotain on JSON; `npm run bench:formula` and
-`npm run bench:generated` run the comparisons above. Every benchmark asserts all
-parsers produce identical output before timing anything, and each case runs in
-its own process.
+`npm run bench:generated` run the comparisons above, generating the Peggy
+baseline from the grammar vendored under `bench/peggy` first. Every benchmark
+asserts all parsers produce identical output before timing anything, and each
+case runs in its own process.
+
+The Chevrotain entrant in the formula benchmarks lives in a sibling project, so
+those two only run on a machine that has it; `npm test`, `npm run test:csp` and
+`npm run bench` are self-contained.
 
 ## Development
 
 ```
-npm test           # 351 tests
+npm test           # 356 tests
 npm run test:csp   # the no-eval path, under a code-generation ban
 npm run bench
+npm run build      # dist/esm, dist/cjs and dist/types
 ```
+
+`npm run build` bundles two entry points with esbuild — the toolkit and the
+runtime — as both ES modules and CommonJS, leaving `json-logic-engine` external.
+The runtime is built separately rather than sliced out of the bundle: a
+generated parser imports it and nothing else, so anything that leaked into it
+would show up in its size immediately.
 
 ```
 src/lexer.js      Token definitions to a sticky-regex lexer with first-char dispatch
@@ -289,6 +307,7 @@ src/emit.js       Writes a grammar out as a module
 src/definition.js The grammar-definition language
 src/parser.js     createParser
 src/runtime.js    The surface a generated module imports
+types/            Hand-written declarations, copied to dist/types by the build
 examples/         JSON, arithmetic and Excel-formula grammars, in both notations
 ```
 

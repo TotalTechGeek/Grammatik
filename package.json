@@ -3,20 +3,41 @@
   "version": "0.1.0",
   "description": "A Chevrotain-like parsing toolkit whose grammars are JSON Logic, executed by json-logic-engine.",
   "type": "module",
-  "main": "./src/index.js",
+  "main": "./dist/cjs/index.js",
+  "module": "./dist/esm/index.js",
+  "types": "./dist/types/index.d.ts",
   "exports": {
-    ".": "./src/index.js",
-    "./runtime": "./src/runtime.js"
+    ".": {
+      "types": "./dist/types/index.d.ts",
+      "import": "./dist/esm/index.js",
+      "require": "./dist/cjs/index.js"
+    },
+    "./runtime": {
+      "types": "./dist/types/runtime.d.ts",
+      "import": "./dist/esm/runtime.js",
+      "require": "./dist/cjs/runtime.js"
+    },
+    "./package.json": "./package.json"
   },
+  "files": [
+    "dist",
+    "src",
+    "bin",
+    "README.md",
+    "LICENSE"
+  ],
+  "sideEffects": false,
   "scripts": {
+    "build": "node scripts/build.js",
+    "prepublishOnly": "npm run build && npm test && npm run test:csp",
     "test": "vitest run",
     "test:watch": "vitest",
-    "bench": "node bench/bench.js",
-    "bench:compare": "node bench/compare-codex.js",
-    "bench:formula": "node bench/formula.js",
     "test:csp": "node --disallow-code-generation-from-strings scripts/check-no-eval.mjs",
     "generate": "node bin/jl-grammar.js generate",
-    "bench:generated": "node bench/generate-formula.js && node bench/generated.js"
+    "bench": "node bench/bench.js",
+    "bench:compare": "node bench/compare-codex.js",
+    "bench:formula": "node bench/peggy/build.js && node bench/formula.js",
+    "bench:generated": "node bench/peggy/build.js && node bench/generate-formula.js && node bench/generated.js"
   },
   "keywords": [
     "json-logic",
@@ -31,6 +52,8 @@
   },
   "devDependencies": {
     "chevrotain": "^11.0.3",
+    "esbuild": "^0.28.2",
+    "peggy": "^5.1.0",
     "vitest": "^3.2.4"
   },
   "bin": {

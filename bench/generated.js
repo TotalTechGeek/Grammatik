@@ -20,7 +20,7 @@ import assert from 'node:assert/strict'
 
 import { createParser } from '../src/index.js'
 import { grammar as formulaGrammar, createFormulaMethods } from '../examples/formula.js'
-import { compile as compilePeggy } from '../../formulas/src/compile.js'
+import * as peggy from '../.generated/peggy-parser.js'
 import { compileChevrotain } from '../../formulas/src/grammar.chevrotain.js'
 import * as generated from '../.generated/formula-parser.js'
 
@@ -50,7 +50,7 @@ const longSample = longParts.join(' + ')
 const parsers = {
   'jl-grammar (generated file)': (source) => generated.parse(source),
   'jl-grammar (built at runtime)': (source) => runtime.parse(source),
-  'Peggy (generated file)': (source) => compilePeggy(source, options),
+  'Peggy (generated file)': (source) => peggy.parse(source, options),
   'Chevrotain (hand-written)': (source) => compileChevrotain(source, options)
 }
 

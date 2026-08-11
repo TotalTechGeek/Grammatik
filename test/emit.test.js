@@ -1,6 +1,7 @@
 import { mkdtemp, writeFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import path from 'node:path'
+import { createRequire } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 
@@ -33,7 +34,37 @@ async function load (grammar, options = {}, methods) {
 
 const runtimeUrl = pathToFileURL(path.resolve('src/runtime.js')).href
 
-beforeAll(async () => { dir = await mkdtemp(path.join(tmpdir(), 'jl-grammar-emit-')) })
+/**
+ * Same as `load`, for CommonJS. The published package resolves
+ * `jl-grammar/runtime` to a CommonJS build; here that build is made on the spot,
+ * so the emitted file is required exactly the way a consumer's would be.
+ */
+async function loadCjs (grammar, options = {}, methods) {
+  const file = path.join(dir, `parser-${counter++}.cjs`)
+  const source = emitModule(grammar, {
+    methods, ...options, format: 'cjs', runtimeSpecifier: './runtime.cjs', engineSpecifier: './engine.cjs'
+  })
+  await writeFile(file, source)
+  const module = createRequire(file)(file)
+  if (methods) module.registerMethods(methods)
+  return { module, source }
+}
+
+beforeAll(async () => {
+  dir = await mkdtemp(path.join(tmpdir(), 'jl-grammar-emit-'))
+  // A CommonJS build of the runtime, so an emitted `.cjs` parser can require it
+  // the way the published package's `require` condition would.
+  const { build } = await import('esbuild')
+  const cjs = { bundle: true, format: 'cjs', platform: 'node', logLevel: 'silent' }
+  await build({ ...cjs, entryPoints: [path.resolve('src/runtime.js')], outfile: path.join(dir, 'runtime.cjs') })
+  // The engine is ESM-only source too, and a temp directory cannot resolve it by
+  // name; both stand in for what the published package resolves for `require`.
+  await build({
+    ...cjs,
+    stdin: { contents: "export { LogicEngine } from 'json-logic-engine'", resolveDir: process.cwd() },
+    outfile: path.join(dir, 'engine.cjs')
+  })
+})
 afterAll(async () => { await rm(dir, { recursive: true, force: true }) })
 
 describe('emitted modules parse identically', () => {
@@ -134,6 +165,47 @@ describe('what the generated file is', () => {
     const { module } = await load(jsonGrammar, { memo: true, positions: 'offset' }, jsonMethods)
     expect(module.parse('{"a":[1,2]}')).toEqual({ a: [1, 2] })
     expect(module.tokenize('1')[0].line).toBe(0)
+  })
+})
+
+describe("format: 'cjs'", () => {
+  it('emits a module that requires and parses identically', async () => {
+    const { module, source } = await loadCjs(calcGrammar)
+    expect(source).toMatch(/^const \{ FAIL: F, expect: E,/m)
+    expect(source).not.toMatch(/^(?:import|export) /m)
+    const reference = createParser(calcGrammar)
+    for (const source of ['1+2', '2+3*4', '(2+3)*4', '5*3+2*5-1']) {
+      expect(module.parse(source), source).toBe(reference.parse(source))
+    }
+  })
+
+  it('exports the same surface as the ES module, plus a default alias', async () => {
+    const { module } = await loadCjs(calcGrammar)
+    expect(Object.keys(module).sort())
+      .toEqual(['default', 'parse', 'parseTokens', 'registerMethods', 'start', 'tokenize', 'tokens'])
+    expect(module.default.parse).toBe(module.parse)
+    expect(module.start).toBe(calcGrammar.start)
+  })
+
+  it('requires json-logic-engine rather than importing it', async () => {
+    // calc folds with `reduce`, so one action cannot be compiled to source and
+    // the engine stays.
+    const { source } = await loadCjs(calcGrammar)
+    expect(source).toMatch(/^const \{ LogicEngine \} = require\("\.\/engine\.cjs"\)$/m)
+  })
+
+  it('drops the engine entirely when every action inlines', async () => {
+    const options = { functions: new Set(['SUM', 'IF', 'ABS']), unaryFunctions: new Set(['ABS']) }
+    const { source, module } = await loadCjs(formulaGrammar, {}, createFormulaMethods(options))
+    expect(source).not.toMatch(/require\("\.\/engine\.cjs"\)/)
+    const reference = createParser(formulaGrammar, { methods: createFormulaMethods(options) })
+    for (const text of ['=1 + 2 * 3', 'IF(A1>=10,SUM(B1:B5),ABS(C1))', 'items[*].total', '2^3^2']) {
+      expect(module.parse(text), text).toEqual(reference.parse(text))
+    }
+  })
+
+  it('rejects a format it does not know', () => {
+    expect(() => emitModule(calcGrammar, { format: 'umd' })).toThrow(/format must be 'esm' or 'cjs'/)
   })
 })
 

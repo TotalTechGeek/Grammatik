@@ -9,11 +9,14 @@ describe('createLexer', () => {
   ]
 
   it('produces tokens with positions', () => {
+    // Full position mode: line/col, no id — see the comment at the push
+    // site in lexer.js for why the two position modes carry different extra
+    // fields rather than both carrying every field.
     const { tokenize } = createLexer(defs)
     expect(tokenize('12 + 3')).toEqual([
-      { type: 'Int', id: 1, image: '12', start: 0, end: 2, line: 1, col: 1 },
-      { type: 'Plus', id: 2, image: '+', start: 3, end: 4, line: 1, col: 4 },
-      { type: 'Int', id: 1, image: '3', start: 5, end: 6, line: 1, col: 6 }
+      { type: 'Int', image: '12', start: 0, end: 2, line: 1, col: 1 },
+      { type: 'Plus', image: '+', start: 3, end: 4, line: 1, col: 4 },
+      { type: 'Int', image: '3', start: 5, end: 6, line: 1, col: 6 }
     ])
   })
 
@@ -115,7 +118,12 @@ describe('position tracking modes', () => {
     const { tokenize, positions } = createLexer(defs, { positions: 'offset' })
     expect(positions).toBe('offset')
     const [, second] = tokenize('1\n\n  22')
-    expect(second).toMatchObject({ image: '22', start: 5, end: 7, line: 0, col: 0 })
+    // Genuinely absent, not zeroed — offset mode carries id in the slot
+    // full mode uses for line/col, rather than every mode carrying both.
+    expect(second).toMatchObject({ image: '22', start: 5, end: 7 })
+    expect(second.line).toBeUndefined()
+    expect(second.col).toBeUndefined()
+    expect(second.id).toBe(1)
   })
 
   it('produces the same types, images and offsets in both modes', () => {

@@ -42,7 +42,7 @@ describe('a grammar with one mode is untouched', () => {
   it('lexes exactly as before', () => {
     const tokens = createLexer(defs).tokenize('1 + 22')
     expect(typesOf(tokens)).toEqual(['Int', 'Plus', 'Int'])
-    expect(tokens[2]).toEqual({ type: 'Int', id: 1, image: '22', start: 4, end: 6, line: 1, col: 5 })
+    expect(tokens[2]).toEqual({ type: 'Int', image: '22', start: 4, end: 6, line: 1, col: 5 })
   })
 
   it('says nothing about modes in its errors', () => {
@@ -212,7 +212,8 @@ describe('positions across transitions', () => {
   it('records offsets only, when asked', () => {
     const tokens = createLexer(TEMPLATE_TOKENS, { positions: 'offset' }).tokenize('ab {{ cd }}')
     const name = tokens.find((t) => t.type === 'Name')
-    expect({ start: name.start, end: name.end, line: name.line }).toEqual({ start: 6, end: 8, line: 0 })
+    expect({ start: name.start, end: name.end }).toEqual({ start: 6, end: 8 })
+    expect(name.line).toBeUndefined()
   })
 
   it('reports offsets in errors when not tracking lines', () => {

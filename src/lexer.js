@@ -24,17 +24,19 @@ import { firstCharSet } from './firstchars.js'
 /**
  * @typedef {object} Token
  * @property {string} type
- * @property {number} id     The token definition's declaration index. Not part
- *                           of the public contract of a token — internal
- *                           combinators use it as a faster stand-in for `type`
- *                           (an integer compare and an array index instead of a
- *                           string compare and a property lookup); `type` is
- *                           what a grammar author's code should read.
+ * @property {number} [id]   The token definition's declaration index, present
+ *                           in `offset` position mode only — see the note on
+ *                           `positions` below. Not part of the public contract
+ *                           of a token — internal combinators use it as a
+ *                           faster stand-in for `type` (an integer compare and
+ *                           an array index instead of a string compare and a
+ *                           property lookup); `type` is what a grammar
+ *                           author's code should read.
  * @property {string} image
  * @property {number} start
  * @property {number} end
- * @property {number} line
- * @property {number} col
+ * @property {number} [line] Present in `full` position mode only.
+ * @property {number} [col]  Present in `full` position mode only.
  */
 
 export class LexError extends Error {
@@ -82,9 +84,13 @@ function modesOf (def) {
  * @param {TokenDef[]} defs
  * @param {{ positions?: 'full' | 'offset' }} [options]
  *   `full` (default) records line and column on every token. `offset` records
- *   only `start`/`end`, which skips a scan of the entire input for newlines —
- *   worth taking when errors do not need to name a line, or when positions are
- *   resolved lazily from the offset afterwards.
+ *   only `start`/`end` plus `id`, which skips a scan of the entire input for
+ *   newlines — worth taking when errors do not need to name a line, or when
+ *   positions are resolved lazily from the offset afterwards. The two modes
+ *   deliberately differ in which extra field they carry rather than both
+ *   carrying every field: a 7th own property on the token object, in either
+ *   mode, measured at a real ~30% tokenize regression (see the comment at the
+ *   push site) that a 6-field object does not pay.
  * @returns {{ tokenize: (text: string) => Token[], tokenNames: string[], positions: string, modeNames: string[] }}
  */
 export function createLexer (defs, options = {}) {
@@ -294,17 +300,21 @@ export function createLexer (defs, options = {}) {
           const image = winner.literal !== undefined
             ? winner.literal
             : (winner === def && matched !== null ? matched : text.slice(offset, end))
-          // One object shape either way, so the parser's property loads stay
-          // monomorphic regardless of the position mode.
-          tokens.push({
-            type: winner.name,
-            id: winner.id,
-            image,
-            start: offset,
-            end,
-            line: trackLines ? line : 0,
-            col: trackLines ? offset - lineStart + 1 : 0
-          })
+          // Two shapes, not one: a 7th own property on this literal — in
+          // either position mode — measured at a genuine ~30% tokenize
+          // regression in this exact function, reproducible and isolated to
+          // the field count alone (a constant 7th field regresses exactly as
+          // much as a computed one), but one that does not reduce to a
+          // minimal repro elsewhere. Each mode instead stays at 6 own
+          // properties: `id` only in offset mode, where line/col would have
+          // been dead weight (always 0) anyway; line/col only in full mode,
+          // where `id` is what gets dropped. `token.id === undefined` is
+          // already how consume/oneOf/alt's dispatch fall back to comparing
+          // `type` for a hand-built token from parseTokens, so a full-mode
+          // token needs no special casing there — it takes the same fallback.
+          tokens.push(trackLines
+            ? { type: winner.name, image, start: offset, end, line, col: offset - lineStart + 1 }
+            : { type: winner.name, id: winner.id, image, start: offset, end })
         }
 
         // A bounded scan over this token's own span, so the whole tokenize costs

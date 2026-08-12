@@ -164,7 +164,7 @@ describe('what the generated file is', () => {
   it('honours memo and offset positions', async () => {
     const { module } = await load(jsonGrammar, { memo: true, positions: 'offset' }, jsonMethods)
     expect(module.parse('{"a":[1,2]}')).toEqual({ a: [1, 2] })
-    expect(module.tokenize('1')[0].line).toBe(0)
+    expect(module.tokenize('1')[0].line).toBeUndefined()
   })
 })
 

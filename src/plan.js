@@ -869,27 +869,37 @@ export function createPlanner (config) {
       // internalized string is an inline-cached property load instead. The null
       // prototype also means a token type of `toString` or `constructor` cannot
       // find an inherited value.
+      //
+      // byId is the same table again, indexed by token.id instead of
+      // token.type — an array index instead of a property load. Used whenever
+      // a token has an id; byToken stays as the fallback for a hand-built
+      // token from parseTokens, which has none.
       const byToken = Object.create(null)
+      const byId = tokenIds ? [] : null
       const groupClosures = new Map()
       for (const [token, branch] of table) {
-        if (Array.isArray(branch)) {
-          let closure = groupClosures.get(branch)
-          if (closure === undefined) {
-            const group = branch.map((b) => planned[branches.indexOf(b)])
-            closure = (state) => {
-              const start = state.idx
-              for (let i = 0; i < group.length; i++) {
-                const value = group[i](state)
-                if (value !== FAIL) return value
-                state.idx = start
-              }
-              return FAIL
-            }
-            groupClosures.set(branch, closure)
-          }
-          byToken[token] = closure
-        } else {
-          byToken[token] = planned[branches.indexOf(branch)]
+        let closure = groupClosures.get(branch)
+        if (closure === undefined) {
+          closure = Array.isArray(branch)
+            ? (() => {
+                const group = branch.map((b) => planned[branches.indexOf(b)])
+                return (state) => {
+                  const start = state.idx
+                  for (let i = 0; i < group.length; i++) {
+                    const value = group[i](state)
+                    if (value !== FAIL) return value
+                    state.idx = start
+                  }
+                  return FAIL
+                }
+              })()
+            : planned[branches.indexOf(branch)]
+          groupClosures.set(branch, closure)
+        }
+        byToken[token] = closure
+        if (byId) {
+          const id = tokenIds.get(token)
+          if (id !== undefined) byId[id] = closure
         }
       }
       const expectedTokens = [...table.keys()]
@@ -899,7 +909,7 @@ export function createPlanner (config) {
         tick(state)
         const token = state.tokens[state.idx]
         if (token !== undefined) {
-          const branch = byToken[token.type]
+          const branch = byId && token.id !== undefined ? byId[token.id] : byToken[token.type]
           if (branch !== undefined) return branch(state)
         }
         for (let i = 0; i < expectedCount; i++) expect(state, expectedTokens[i])

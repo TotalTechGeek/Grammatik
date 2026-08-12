@@ -23,6 +23,14 @@ export interface TokenDef {
   ignoreCase?: boolean
   /** Defer to this token when it matches more text, e.g. `if` yielding to an identifier. */
   longerAlt?: string
+  /** The lexer mode this token belongs to. Defaults to `'default'`. */
+  mode?: string
+  /** Several modes, for a token that serves more than one. */
+  modes?: string[]
+  /** Enter this mode after the token matches. */
+  pushMode?: string
+  /** Leave the current mode after the token matches. */
+  popMode?: boolean
 }
 
 export interface Token {
@@ -89,6 +97,8 @@ export interface Lexer {
   tokenize (text: string): Token[]
   tokenNames: string[]
   positions: PositionMode
+  /** Every mode the token definitions mention, `'default'` first. */
+  modeNames: string[]
 }
 
 export interface JLParser {

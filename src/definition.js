@@ -33,6 +33,9 @@ export const definitionTokens = [
   keyword('SkipKeyword', 'skip'),
   keyword('IgnoreCaseKeyword', 'ignoreCase'),
   keyword('LongerAltKeyword', 'longerAlt'),
+  keyword('ModeKeyword', 'mode'),
+  keyword('PushModeKeyword', 'pushMode'),
+  keyword('PopModeKeyword', 'popMode'),
   keyword('TrueKeyword', 'true'),
   keyword('FalseKeyword', 'false'),
   keyword('NullKeyword', 'null'),
@@ -74,7 +77,11 @@ export const definitionRules = {
   TokenFlag: alt(
     seq(consume('SkipKeyword'), action(['skip', true])),
     seq(consume('IgnoreCaseKeyword'), action(['ignoreCase', true])),
-    seq(consume('LongerAltKeyword'), label('name', subrule('IdentifierValue')), action(['longerAlt', { val: 'name' }]))
+    seq(consume('LongerAltKeyword'), label('name', subrule('IdentifierValue')), action(['longerAlt', { val: 'name' }])),
+    // `mode` may be repeated, for a token that serves several modes.
+    seq(consume('ModeKeyword'), label('name', subrule('IdentifierValue')), action(['mode', { val: 'name' }])),
+    seq(consume('PushModeKeyword'), label('name', subrule('IdentifierValue')), action(['pushMode', { val: 'name' }])),
+    seq(consume('PopModeKeyword'), action(['popMode', true]))
   ),
   RuleDeclaration: seq(
     consume('RuleKeyword'), label('name', subrule('IdentifierValue')), consume('Equals'),
@@ -157,7 +164,15 @@ export function createMetaMethods () {
     },
     token: ([name, kind, flags]) => {
       const value = { name, [kind[0]]: kind[1] }
-      for (let i = 0; i < flags.length; i++) value[flags[i][0]] = flags[i][1]
+      // `mode` is the one repeatable flag: one occurrence stays `mode`, several
+      // collapse to `modes`, which is what a token serving two modes looks like.
+      const modes = []
+      for (let i = 0; i < flags.length; i++) {
+        if (flags[i][0] === 'mode') modes.push(flags[i][1])
+        else value[flags[i][0]] = flags[i][1]
+      }
+      if (modes.length === 1) value.mode = modes[0]
+      else if (modes.length > 1) value.modes = modes
       return ['token', value]
     },
     rule: ([name, parser]) => ['rule', name, parser],

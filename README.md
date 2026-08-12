@@ -52,6 +52,44 @@ A grammar is `{ tokens, rules, start }`.
 | `skip` | consume but produce no token (whitespace, comments) |
 | `ignoreCase` | case-insensitive matching |
 | `longerAlt` | defer to another token when it matches more text — `iffy` should lex as an identifier, not `if` + `fy` |
+| `mode` / `modes` | the lexer mode(s) this token belongs to; default `'default'` |
+| `pushMode` / `popMode` | enter or leave a mode after the token matches |
+
+### Lexer modes
+
+Some languages mean different things by the same character depending on where
+they are. In a template, whitespace outside `{{ }}` is literal text and
+whitespace inside it is noise. A token belongs to one or more modes and only
+competes while one of them is current:
+
+```js
+const tokens = [
+  { name: 'Text',  pattern: '(?:[^{]|\\{(?!\\{))+', mode: 'default' },
+  { name: 'Open',  literal: '{{',   mode: 'default',    pushMode: 'expression' },
+  { name: 'Close', literal: '}}',   mode: 'expression', popMode: true },
+  { name: 'WS',    pattern: '\\s+', mode: 'expression', skip: true },
+  { name: 'Name',  pattern: '[A-Za-z_][A-Za-z0-9_.]*', mode: 'expression' }
+]
+
+createLexer(tokens).tokenize('hi {{ name }} there')
+// Text('hi ')  Open  Name('name')  Close  Text(' there')
+```
+
+The stack starts fresh at `'default'` on every `tokenize` call, so a lexer is
+reusable and a failure leaves nothing behind. Skipped tokens transition too — a
+comment opener can push a mode without producing anything. When `longerAlt`
+changes which token wins, the winner's transition is the one that applies.
+
+Reaching the end of input inside a pushed mode is deliberately *not* a lexer
+error: the tokens are all valid, and the parser reports the missing closer far
+better than the lexer could. Popping the initial mode is a `LexError`.
+
+Refused when the lexer is built: a token that both pushes and pops (split it in
+two), a push to a mode no token belongs to, and a `longerAlt` that is not active
+in some mode where it could win.
+
+A grammar that declares no modes never allocates a stack and takes exactly the
+path it did before modes existed.
 
 **Rules** map a name to a parser, and may reference each other with `subrule`,
 including recursively. Left recursion is rejected when the parser is built:
@@ -140,6 +178,8 @@ start sum;
 token WS   pattern "\\s+" skip;
 token Int  pattern "[0-9]+";
 token Plus literal "+";
+// Modes too: `mode` (repeatable), `pushMode <name>`, `popMode`.
+// token Open literal "{{" mode default pushMode expression;
 
 rule sum = infixLeft(
   as(consume(Int), action({"+":[{"val":"image"},0]})),

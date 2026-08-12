@@ -7,7 +7,7 @@ import { createPlanner } from './plan.js'
 import { createCodegen } from './codegen.js'
 import { usesOuterScope } from './plan.js'
 import { emitMethodsBlock, evaluateMethodsBlock } from './methodsblock.js'
-import { createValueMethods } from './methods.js'
+import { createValueMethods } from './values.js'
 import { Compiler, LogicEngine } from 'json-logic-engine'
 
 /**
@@ -206,9 +206,16 @@ export function emitModule (spec, options = {}) {
   // The two formats differ only in how the file opens and closes; every rule,
   // helper and action between them is the same source.
   const cjs = format === 'cjs'
+  // A module that still has an engine runs some actions through it, and those
+  // actions may use the value methods, so it has to register them the way
+  // `createParser` does. They come from the runtime rather than being written
+  // out here, so there is one implementation rather than two.
+  const runtimeImports = ['FAIL as F', 'expect as E', 'createState', 'buildParseError', 'createLexer']
+  if (needsEngine) runtimeImports.push('createValueMethods')
+
   const importRuntime = cjs
-    ? `const { FAIL: F, expect: E, createState, buildParseError, createLexer } = require(${quote(runtimeSpecifier)})`
-    : `import { FAIL as F, expect as E, createState, buildParseError, createLexer } from ${quote(runtimeSpecifier)}`
+    ? `const { ${runtimeImports.map((b) => b.replace(' as ', ': ')).join(', ')} } = require(${quote(runtimeSpecifier)})`
+    : `import { ${runtimeImports.join(', ')} } from ${quote(runtimeSpecifier)}`
   const importEngine = engineFree
     ? ''
     : cjs
@@ -267,6 +274,7 @@ function registerMethods (methods) {
   return engine
 }`
   : `const engine = new LogicEngine()
+for (const [name, method] of Object.entries(createValueMethods())) engine.addMethod(name, method)
 ${needsAbove ? 'const above = []\n' : ''}
 /**
  * Semantic methods the grammar refers to. Pass the same object you would give

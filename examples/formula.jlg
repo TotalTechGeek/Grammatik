@@ -1,5 +1,16 @@
 // Sheetlang, written in the grammar-definition language (see src/definition.js).
 // Every action is JSON Logic data; this file contains no executable JavaScript.
+//
+// This file is the grammar. `formula.js` beside it loads this and adds the
+// semantic methods — there is no second copy of the rules to keep in step.
+//
+// Nodes are built with `obj`, which takes flat key/value pairs, so the operator
+// an expression produces can come from the input: `{"obj": [{"val": "op"}, ...]}`
+// is `{"+": [left, right]}` when `op` is `+`. The methods that used to do that in
+// JavaScript are gone. Note what is *not* converted — `unary` needs a
+// conditional and `negativeNumber` needs arithmetic, and neither `if`/`===` nor
+// `*` compiles to inlinable source, so expressing them as data would cost this
+// grammar its engine-free generated parser. Measured, not assumed.
 
 grammar Sheetlang;
 start Formula;
@@ -50,7 +61,7 @@ rule Expression = subrule(Comparison);
 rule Comparison = infixLeft(
   subrule(Concatenation),
   subrule(ComparisonOperator),
-  action({"formula.binary":[{"val":"op"},{"val":"left"},{"val":"right"}]})
+  action({"obj":[{"val":"op"},[{"val":"left"},{"val":"right"}]]})
 );
 
 rule ComparisonOperator = seq(
@@ -70,19 +81,19 @@ rule Concatenation = infixLeft(
 rule Additive = infixLeft(
   subrule(Multiplicative),
   alt(consume(Plus), consume(Minus)),
-  action({"formula.binary":[{"val":["op","image"]},{"val":"left"},{"val":"right"}]})
+  action({"obj":[{"val":["op","image"]},[{"val":"left"},{"val":"right"}]]})
 );
 
 rule Multiplicative = infixLeft(
   subrule(Exponent),
   alt(consume(Multiply), consume(Divide)),
-  action({"formula.binary":[{"val":["op","image"]},{"val":"left"},{"val":"right"}]})
+  action({"obj":[{"val":["op","image"]},[{"val":"left"},{"val":"right"}]]})
 );
 
 rule Exponent = infixLeft(
   subrule(Unary),
   consume(Power),
-  action({"formula.power2":[{"val":"left"},{"val":"right"}]})
+  action({"obj":["POWER",[{"val":"left"},{"val":"right"}]]})
 );
 
 rule Unary = prefix(
@@ -94,7 +105,7 @@ rule Unary = prefix(
 rule Postfix = postfix(
   subrule(Primary),
   consume(Percent),
-  action({"formula.percent":{"val":"left"}})
+  action({"obj":["/",[{"val":"left"},100]]})
 );
 
 rule Primary = alt(
@@ -138,7 +149,7 @@ rule StringLiteral = as(consume(String), action({"formula.string":{"val":"image"
 
 rule BooleanLiteral = as(consume(Boolean), action({"formula.boolean":{"val":"image"}}));
 
-rule ErrorLiteral = as(consume(Error), action({"formula.error":{"val":"image"}}));
+rule ErrorLiteral = as(consume(Error), action({"obj":["ERRORVALUE",[{"val":"image"}]]}));
 
 rule ArrayLiteral = seq(
   consume(LBrace), label(rows, subrule(ArrayRows)), consume(RBrace),

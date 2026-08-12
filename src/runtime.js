@@ -13,3 +13,4 @@
 
 export { FAIL, expect, createState, buildParseError, ParseError } from './state.js'
 export { createLexer, LexError } from './lexer.js'
+export { createValueMethods } from './values.js'

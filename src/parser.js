@@ -4,7 +4,8 @@
 import { LogicEngine } from 'json-logic-engine'
 
 import { createLexer } from './lexer.js'
-import { createMethods, createValueMethods } from './methods.js'
+import { createMethods } from './methods.js'
+import { createValueMethods } from './values.js'
 import { analyze } from './analyze.js'
 import { createPlanner } from './plan.js'
 import { createCodegen } from './codegen.js'

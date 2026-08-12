@@ -194,8 +194,9 @@ createParser(grammar, {
 ## The grammar-definition language
 
 Grammars can also be written in a surface syntax that parses *into* that JSON.
-`examples/formula.jlg` is a complete Excel-formula grammar in it — 196 lines with
-no JavaScript in them.
+`examples/formula.jlg` is a complete Excel-formula grammar in it, with no
+JavaScript in it. It is the only copy of that grammar — `examples/formula.js`
+loads it and supplies the semantic methods.
 
 ```
 grammar Calc;

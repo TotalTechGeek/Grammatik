@@ -174,6 +174,14 @@ export declare function evaluateMethodsBlock (body: string): {
 export declare const OPERATORS: string[]
 export declare const PARSER_OPS: Set<string>
 export declare function createMethods (): Record<string, any>
+
+/**
+ * JSON Logic methods available inside semantic actions, beyond the engine's own.
+ * Currently `obj`, which builds an object from flat key/value pairs so a node's
+ * key can come from the input. Registered automatically by `createParser` and
+ * `emitModule`; exported for hosts that build their own engine.
+ */
+export declare function createValueMethods (): Record<string, any>
 export declare function buildDispatch (...args: any[]): any
 export declare function firstOf (...args: any[]): any
 

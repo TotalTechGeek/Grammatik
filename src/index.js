@@ -4,7 +4,7 @@
 export { createParser, GrammarError } from './parser.js'
 export { createLexer, LexError } from './lexer.js'
 export { analyze, buildDispatch, firstOf, PARSER_OPS } from './analyze.js'
-export { createMethods, OPERATORS } from './methods.js'
+export { createMethods, createValueMethods, OPERATORS } from './methods.js'
 export {
   definitionGrammar, definitionTokens, definitionRules, CONSTRUCTOR_NAMES,
   createDefinitionParser, parseDefinition, createParserFromSource

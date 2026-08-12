@@ -7,6 +7,7 @@ import { createPlanner } from './plan.js'
 import { createCodegen } from './codegen.js'
 import { usesOuterScope } from './plan.js'
 import { emitMethodsBlock, evaluateMethodsBlock } from './methodsblock.js'
+import { createValueMethods } from './methods.js'
 import { Compiler, LogicEngine } from 'json-logic-engine'
 
 /**
@@ -164,6 +165,7 @@ export function emitModule (spec, options = {}) {
   // and without that the actions simply ship as data.
   const blockMethods = block && !semanticMethods ? tryEvaluate(methodsBlock) : null
   const compileEngine = new LogicEngine()
+  for (const [name, method] of Object.entries(createValueMethods())) compileEngine.addMethod(name, method)
   for (const [name, method] of Object.entries(semanticMethods || blockMethods || {})) compileEngine.addMethod(name, method)
 
   let needsEngine = execution === 'interpreted'

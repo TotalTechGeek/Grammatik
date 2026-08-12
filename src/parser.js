@@ -4,7 +4,7 @@
 import { LogicEngine } from 'json-logic-engine'
 
 import { createLexer } from './lexer.js'
-import { createMethods } from './methods.js'
+import { createMethods, createValueMethods } from './methods.js'
 import { analyze } from './analyze.js'
 import { createPlanner } from './plan.js'
 import { createCodegen } from './codegen.js'
@@ -106,6 +106,8 @@ export function createParser (spec, options = {}) {
 
   const engine = new LogicEngine()
   for (const [name, method] of Object.entries(createMethods())) engine.addMethod(name, method)
+  // Value methods before the caller's, so a grammar can override one.
+  for (const [name, method] of Object.entries(createValueMethods())) engine.addMethod(name, method)
   for (const [name, method] of Object.entries(extraMethods || {})) engine.addMethod(name, method)
 
   const startRule = rules[start]

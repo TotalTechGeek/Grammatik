@@ -159,6 +159,25 @@ Actions are JSON Logic, evaluated against the enclosing sequence's bindings:
 
 The parser state is one scope up, reachable with `{"val": [[-1], "idx"]}`.
 
+### Building nodes with computed keys
+
+The commonest thing a semantic action does is build a node whose *type* comes
+from the input. JSON Logic has no object literal, so that used to mean a
+JavaScript method — `([op, left, right]) => ({ [op]: [left, right] })` — in every
+grammar that had operators. `obj` takes flat key/value pairs and does it as data:
+
+```js
+{ obj: [{ val: ['op', 'image'] }, [{ val: 'left' }, { val: 'right' }]] }
+// with op.image === '+'  ->  { '+': [left, right] }
+
+{ obj: [{ val: 'k' }, { val: 'v' }, 'kind', 'pair'] }   // several entries
+```
+
+It compiles to an object literal, so an action using it stays inlinable and the
+generated parser keeps its engine-free build. That is the whole design
+constraint: `eachKey` already covers static keys, and an operator that silently
+cost a grammar its AOT build would be worse than no operator.
+
 Pass `methods` to reach past the base operator set. Declare `optimizeUnary` on
 single-argument methods: it tells the engine not to wrap the evaluated argument,
 which skips an allocation and — for a method whose argument is *itself* an array

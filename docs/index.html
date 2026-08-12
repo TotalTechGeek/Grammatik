@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Grammatik sandbox</title>
+<meta name="description" content="Write a grammar, parse some input, and read the parser it generates — in the browser.">
+<link rel="stylesheet" href="./style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>◦</text></svg>">
+</head>
+<body>
+
+<header>
+  <h1>Grammatik <span class="muted">sandbox</span></h1>
+  <nav>
+    <label>Example
+      <select id="example"></select>
+    </label>
+    <label>Execution
+      <select id="execution">
+        <option value="generated">generated</option>
+        <option value="interpreted">interpreted (no eval)</option>
+      </select>
+    </label>
+    <label>Positions
+      <select id="positions">
+        <option value="full">line + column</option>
+        <option value="offset">offset only</option>
+      </select>
+    </label>
+    <a href="https://github.com/TotalTechGeek/Grammatik">GitHub</a>
+  </nav>
+</header>
+
+<main>
+  <section class="pane" id="grammar-pane">
+    <h2>Grammar <span class="muted" id="grammar-status"></span></h2>
+    <textarea id="grammar" spellcheck="false" aria-label="Grammar source"></textarea>
+  </section>
+
+  <section class="pane" id="input-pane">
+    <h2>Input</h2>
+    <textarea id="input" spellcheck="false" aria-label="Input to parse"></textarea>
+  </section>
+
+  <section class="pane" id="output-pane">
+    <h2>
+      <span class="tabs" role="tablist">
+        <button role="tab" data-tab="result" class="active">Result</button>
+        <button role="tab" data-tab="tokens">Tokens</button>
+        <button role="tab" data-tab="json">Grammar as JSON</button>
+        <button role="tab" data-tab="module">Generated parser</button>
+      </span>
+      <span class="muted" id="timing"></span>
+    </h2>
+    <pre id="output" tabindex="0"></pre>
+  </section>
+</main>
+
+<footer>
+  <p>
+    The grammar on the left is <strong>data</strong> — the “Grammar as JSON” tab is
+    the whole thing, and it survives <code>JSON.stringify</code>. “Generated
+    parser” is the standalone module <code>emitModule</code> writes: one function
+    per rule, no analyzer, no <code>eval</code>.
+  </p>
+</footer>
+
+<script type="module" src="./sandbox.js"></script>
+</body>
+</html>

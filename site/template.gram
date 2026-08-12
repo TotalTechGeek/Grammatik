@@ -1,0 +1,31 @@
+// A tiny template language, to show what lexer modes are for.
+//
+// Outside `{{ }}` whitespace is literal text; inside it is noise. That is one
+// token definition per mode, rather than a hand-written scanner. Watch the
+// Tokens tab: `Text` carries its spaces, `Name` does not.
+
+grammar Template;
+start document;
+
+token Text pattern "(?:[^{]|\\{(?!\\{))+" mode default;
+token Open literal "{{" mode default pushMode expression;
+
+token Close literal "}}" mode expression popMode;
+token WS pattern "[ \\t\\r\\n]+" mode expression skip;
+token Name pattern "[A-Za-z_][A-Za-z0-9_.]*" mode expression;
+
+// The actions build JSON Logic rather than evaluating anything: a template
+// compiles to `{cat: [...]}`, and each interpolation to `{val: "name"}`. `obj`
+// is what makes that expressible as data — it takes flat key/value pairs, so the
+// key can come from the input.
+rule document = as(many(alt(
+  as(consume(Text), action({"val":"image"})),
+  subrule(interpolation)
+)), action({"obj":["cat",{"val":[]}]}));
+
+rule interpolation = seq(
+  consume(Open),
+  label(name, as(consume(Name), action({"val":"image"}))),
+  consume(Close),
+  action({"obj":["val",{"val":"name"}]})
+);

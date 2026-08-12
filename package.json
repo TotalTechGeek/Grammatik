@@ -38,7 +38,8 @@
     "bench:compare": "node bench/compare-codex.js",
     "bench:formula": "node bench/peggy/build.js && node bench/formula.js",
     "bench:generated": "node bench/peggy/build.js && node bench/generate-formula.js && node bench/generated.js",
-    "bench:json-parsers": "node bench/jsonParsers/run.js"
+    "bench:json-parsers": "node bench/jsonParsers/run.js",
+    "build:site": "node site/build.js"
   },
   "keywords": [
     "parser",

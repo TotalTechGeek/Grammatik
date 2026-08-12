@@ -3,11 +3,11 @@ import { splitMethodsBlock, evaluateMethodsBlock } from './methodsblock.js'
 
 /**
  * The grammar-definition language: a small surface syntax for the same grammars
- * `createParser` takes as JSON. `examples/*.jlg` are written in it.
+ * `createParser` takes as JSON. `examples/*.gram` are written in it.
  *
  * It is defined by a grammar in this library's own format and parsed by this
  * library — the bootstrap is the point. `test/meta-formula.test.js` asserts that
- * parsing `formula.jlg` produces a structure deep-equal to the hand-authored
+ * parsing `formula.gram` produces a structure deep-equal to the hand-authored
  * grammar object, so the two spellings cannot drift.
  */
 

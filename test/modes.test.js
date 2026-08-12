@@ -292,7 +292,7 @@ describe('runtime and emitted parsers agree', () => {
   const samples = ['hi {{ name }} there', '{{a}}{{b}}', 'plain', 'x {{ y.z }}']
 
   beforeAll(async () => {
-    dir = await mkdtemp(path.join(tmpdir(), 'jl-grammar-modes-'))
+    dir = await mkdtemp(path.join(tmpdir(), 'grammatik-modes-'))
     const { build } = await import('esbuild')
     await build({
       entryPoints: [path.resolve('src/runtime.js')],

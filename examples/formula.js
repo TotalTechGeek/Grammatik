@@ -2,20 +2,20 @@ import { readFileSync } from 'node:fs'
 import { createParser, parseDefinition, evaluateMethodsBlock } from '../src/index.js'
 
 /**
- * The Excel-formula example, loaded from `formula.jlg`.
+ * The Excel-formula example, loaded from `formula.gram`.
  *
  * There is nothing of the language in this file. The rules, the actions and the
- * semantic methods all live in the `.jlg`; this reads it, evaluates its `methods`
+ * semantic methods all live in the `.gram`; this reads it, evaluates its `methods`
  * block, and returns a parser.
  *
  * Evaluating a block needs `new Function`, which is why this module is not
  * importable under a Content-Security-Policy without `unsafe-eval` — a block is
- * a build-time feature. `jl-grammar generate` writes the block out as source
+ * a build-time feature. `grammatik generate` writes the block out as source
  * instead, and the resulting parser needs no eval at all. See
  * `scripts/check-no-eval.mjs`, which builds this grammar the other way.
  */
 
-const source = readFileSync(new URL('./formula.jlg', import.meta.url), 'utf8')
+const source = readFileSync(new URL('./formula.gram', import.meta.url), 'utf8')
 
 // Interpreted, so reading the grammar itself generates no code; only the block
 // below does.

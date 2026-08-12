@@ -2,7 +2,7 @@
 'use strict'
 
 /**
- * The `methods { ... }` block: a terminal section of a `.jlg` file holding the
+ * The `methods { ... }` block: a terminal section of a `.gram` file holding the
  * JavaScript its semantic actions call.
  *
  * A grammar's actions name methods — `{"formula.number": {"val": "image"}}` —
@@ -12,7 +12,7 @@
  * The block does not compromise the grammar's data property. It is separated
  * textually *before* the definition language sees the source, so what
  * `parseDefinition` returns is the same JSON-serializable object it always was,
- * with the block carried alongside as an opaque string. A `.jlg` with no block
+ * with the block carried alongside as an opaque string. A `.gram` with no block
  * parses exactly as it did.
  *
  * The block is a module body: its default export is the methods table, or, with
@@ -124,7 +124,7 @@ export function evaluateMethodsBlock (body) {
     throw new Error(
       'this methods block imports, so it cannot be evaluated in place: ' +
       `${JSON.stringify(info.imports[0])}. Generate a parser file from it instead ` +
-      '(`jl-grammar generate`), or pass `methods` explicitly.'
+      '(`grammatik generate`), or pass `methods` explicitly.'
     )
   }
   if (!info.hasDefault && info.names.length === 0) {

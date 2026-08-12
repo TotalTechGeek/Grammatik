@@ -5,8 +5,8 @@ import { createDefinitionParser } from '../src/index.js'
 import arithmeticGrammar from '../examples/calc.js'
 import { grammar as jsonGrammar, methods as jsonMethods } from '../examples/json.js'
 
-const arithmeticSource = await readFile(new URL('../examples/arithmetic.jlg', import.meta.url), 'utf8')
-const jsonSource = await readFile(new URL('../examples/json.jlg', import.meta.url), 'utf8')
+const arithmeticSource = await readFile(new URL('../examples/arithmetic.gram', import.meta.url), 'utf8')
+const jsonSource = await readFile(new URL('../examples/json.gram', import.meta.url), 'utf8')
 const metaCompiled = createDefinitionParser()
 const metaInterpreted = createDefinitionParser({ execution: 'interpreted' })
 

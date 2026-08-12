@@ -1,5 +1,5 @@
 /**
- * `jl-grammar/runtime` — the surface a generated parser imports.
+ * `grammatik/runtime` — the surface a generated parser imports.
  *
  * Deliberately small: a generated file needs the lexer, the parse state and
  * error construction, and nothing else. The analyzer, planner and code

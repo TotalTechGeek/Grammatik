@@ -93,7 +93,7 @@ describe('an action using it still compiles to source', () => {
   let counter = 0
   const runtimeUrl = pathToFileURL(path.resolve('src/runtime.js')).href
 
-  beforeAll(async () => { dir = await mkdtemp(path.join(tmpdir(), 'jl-grammar-obj-')) })
+  beforeAll(async () => { dir = await mkdtemp(path.join(tmpdir(), 'grammatik-obj-')) })
   afterAll(async () => { await rm(dir, { recursive: true, force: true }) })
 
   // Only `obj` and binding reads, so nothing else can be blamed for an engine.

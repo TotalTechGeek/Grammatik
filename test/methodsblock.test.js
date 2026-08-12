@@ -11,7 +11,7 @@ import {
 } from '../src/index.js'
 
 /**
- * A `.jlg` file can carry the JavaScript its actions call, so a grammar is one
+ * A `.gram` file can carry the JavaScript its actions call, so a grammar is one
  * file rather than a file plus a module the caller has to wire up.
  *
  * The property that must not break: the grammar half stays data. Parsing a file
@@ -46,7 +46,7 @@ let counter = 0
 const runtimeUrl = pathToFileURL(path.resolve('src/runtime.js')).href
 
 beforeAll(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), 'jl-grammar-block-'))
+  dir = await mkdtemp(path.join(tmpdir(), 'grammatik-block-'))
   // A CommonJS build of the runtime, so an emitted `.cjs` parser can require it.
   const { build } = await import('esbuild')
   const cjs = { bundle: true, format: 'cjs', platform: 'node', logLevel: 'silent' }

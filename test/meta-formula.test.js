@@ -6,9 +6,9 @@ import { grammar, createFormulaMethods } from '../examples/formula.js'
 /**
  * The definition language, bootstrapped on the largest grammar here.
  *
- * This test used to assert that `formula.jlg` and a hand-written JavaScript twin
+ * This test used to assert that `formula.gram` and a hand-written JavaScript twin
  * produced the same structure. They did, because someone kept them agreeing;
- * the twin is gone and the `.jlg` is the only copy. What is left is the part
+ * the twin is gone and the `.gram` is the only copy. What is left is the part
  * that was always load-bearing: both execution modes of the meta-parser must
  * agree, the result must survive a JSON round trip, and the grammar must still
  * produce exactly these trees.
@@ -18,7 +18,7 @@ import { grammar, createFormulaMethods } from '../examples/formula.js'
  * the outputs below did not move.
  */
 
-const definition = await readFile(new URL('../examples/formula.jlg', import.meta.url), 'utf8')
+const definition = await readFile(new URL('../examples/formula.gram', import.meta.url), 'utf8')
 // `parseDefinition` rather than the definition parser directly: the file ends
 // with a `methods` block, which is separated out before the language sees it.
 const generated = parseDefinition(definition)

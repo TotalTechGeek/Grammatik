@@ -1,5 +1,5 @@
 /**
- * The Excel-formula grammar of `examples/formula.jlg`, hand-written with
+ * The Excel-formula grammar of `examples/formula.gram`, hand-written with
  * Chevrotain — the benchmark rival, kept here so the comparison is reproducible
  * from this repository alone.
  *
@@ -8,7 +8,7 @@
  * the interesting entrant. It emits the same JSON Logic as the grammar it
  * mirrors, and every benchmark asserts that before timing anything.
  *
- * Coverage mirrors formula.jlg closely enough for the formulas the benchmarks
+ * Coverage mirrors formula.gram closely enough for the formulas the benchmarks
  * exercise; it has not been hardened against every edge case (e.g.
  * case-preservation nuances of bare, unanchored cell-like identifiers).
  */
@@ -106,7 +106,7 @@ const allTokens = [
 const lexer = new Lexer(allTokens, { positionTracking: 'onlyStart' })
 
 // ---------------------------------------------------------------------------
-// Shared helpers (identical semantics to grammar.jlg)
+// Shared helpers (identical semantics to grammar.gram)
 // ---------------------------------------------------------------------------
 
 const COMPARISON_OPS = { [Eq.name]: '==', [Ne.name]: '!=', [Lt.name]: '<', [LtEq.name]: '<=', [Gt.name]: '>', [GtEq.name]: '>=' }

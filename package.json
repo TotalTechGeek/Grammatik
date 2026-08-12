@@ -1,7 +1,7 @@
 {
-  "name": "jl-grammar",
+  "name": "grammatik",
   "version": "0.1.0",
-  "description": "A Chevrotain-like parsing toolkit whose grammars are JSON Logic, executed by json-logic-engine.",
+  "description": "A parser toolkit whose grammars are data: tokens, rules and semantic actions all serializable, compiled ahead of time.",
   "type": "module",
   "main": "./dist/cjs/index.js",
   "module": "./dist/esm/index.js",
@@ -33,16 +33,19 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:csp": "node --disallow-code-generation-from-strings scripts/check-no-eval.mjs",
-    "generate": "node bin/jl-grammar.js generate",
+    "generate": "node bin/grammatik.js generate",
     "bench": "node bench/bench.js",
     "bench:compare": "node bench/compare-codex.js",
     "bench:formula": "node bench/peggy/build.js && node bench/formula.js",
-    "bench:generated": "node bench/peggy/build.js && node bench/generate-formula.js && node bench/generated.js"
+    "bench:generated": "node bench/peggy/build.js && node bench/generate-formula.js && node bench/generated.js",
+    "bench:json-parsers": "node bench/jsonParsers/run.js"
   },
   "keywords": [
-    "json-logic",
     "parser",
     "grammar",
+    "lexer",
+    "parser-generator",
+    "json-logic",
     "chevrotain",
     "peg"
   ],
@@ -57,6 +60,6 @@
     "vitest": "^3.2.4"
   },
   "bin": {
-    "jl-grammar": "./bin/jl-grammar.js"
+    "grammatik": "./bin/grammatik.js"
   }
 }

@@ -8,7 +8,7 @@
  * The grammar is vendored here rather than read out of a sibling project on
  * purpose: it is the reference point for every Peggy number in the README, and
  * a baseline that can change underneath the measurements is not a baseline.
- * It emits the same JSON Logic as `examples/formula.jlg`, which the benchmarks
+ * It emits the same JSON Logic as `examples/formula.gram`, which the benchmarks
  * assert before timing anything.
  */
 

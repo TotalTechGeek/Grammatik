@@ -5,9 +5,9 @@
 /**
  * Generates a parser module from a grammar, the way `peggy` does.
  *
- *   jl-grammar generate <grammar.jlg|grammar.json> [-o out.js] [options]
+ *   grammatik generate <grammar.gram|grammar.json> [-o out.js] [options]
  *
- * A `.jlg` file is parsed with the grammar-definition language; a `.json` file
+ * A `.gram` file is parsed with the grammar-definition language; a `.json` file
  * is read as a grammar object directly.
  */
 
@@ -27,7 +27,7 @@ import { parseDefinition, emitModule } from '../src/index.js'
 async function loadMethodsBlock (block, grammarPath) {
   const file = path.join(
     path.dirname(path.resolve(grammarPath)),
-    `.jl-grammar-methods-${process.pid}-${Date.now()}.mjs`
+    `.grammatik-methods-${process.pid}-${Date.now()}.mjs`
   )
   await writeFile(file, block)
   try {
@@ -38,7 +38,7 @@ async function loadMethodsBlock (block, grammarPath) {
   }
 }
 
-const USAGE = `Usage: jl-grammar generate <grammar.jlg|grammar.json> [options]
+const USAGE = `Usage: grammatik generate <grammar.gram|grammar.json> [options]
 
   -o, --out <file>        Write here instead of stdout
       --format <format>   esm (default) | cjs

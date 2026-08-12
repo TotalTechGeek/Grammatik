@@ -1,4 +1,4 @@
-# jl-grammar
+# grammatik
 
 A parser toolkit whose grammars are data. Tokens, rules and semantic actions are
 all JSON Logic, so a grammar can be stored in a database, shipped over the wire,
@@ -9,7 +9,7 @@ Semantic actions are evaluated by
 parser itself is specialized ahead of time.
 
 ```js
-import { createParser } from 'jl-grammar'
+import { createParser } from 'grammatik'
 
 const parser = createParser({
   tokens: [
@@ -35,7 +35,7 @@ parser.parse('1 + 2 + 3')   // 6
 ## Install
 
 ```
-npm install jl-grammar json-logic-engine
+npm install grammatik json-logic-engine
 ```
 
 ## A grammar
@@ -194,7 +194,7 @@ createParser(grammar, {
 ## The grammar-definition language
 
 Grammars can also be written in a surface syntax that parses *into* that JSON.
-`examples/formula.jlg` is a complete Excel-formula grammar in it, with no
+`examples/formula.gram` is a complete Excel-formula grammar in it, with no
 JavaScript in it. It is the only copy of that grammar — `examples/formula.js`
 loads it and supplies the semantic methods.
 
@@ -216,7 +216,7 @@ rule sum = infixLeft(
 ```
 
 ```js
-import { parseDefinition, createParserFromSource } from 'jl-grammar'
+import { parseDefinition, createParserFromSource } from 'grammatik'
 
 const grammar = parseDefinition(source)      // plain data, JSON.stringify-able
 const parser = createParserFromSource(source)
@@ -229,7 +229,7 @@ defined by a grammar in this format, and parsed by this library.
 ### Carrying the methods with the grammar
 
 Actions name methods, and those methods have to be real functions somewhere. A
-`.jlg` file can hold them itself, in a `methods { ... }` block at the end:
+`.gram` file can hold them itself, in a `methods { ... }` block at the end:
 
 ```
 rule sum = infixLeft(
@@ -261,9 +261,9 @@ parse('1 + 2 + 3')                    // 6
 ```
 
 `createParserFromSource` evaluates the block with `new Function`, so a block is
-the one part of a `.jlg` that needs `eval` at run time — and a block that
+the one part of a `.gram` that needs `eval` at run time — and a block that
 `import`s cannot be evaluated that way at all. Both are build-time features:
-`jl-grammar generate` resolves an importing block as a real module, and the
+`grammatik generate` resolves an importing block as a real module, and the
 emitted file only ever contains it as source.
 
 ## API
@@ -315,7 +315,7 @@ point of failure:
 ## Generating a parser file
 
 ```
-npx jl-grammar generate grammar.jlg -o parser.js
+npx grammatik generate grammar.gram -o parser.js
 ```
 
 ```js
@@ -329,7 +329,7 @@ no grammar work and calls no `new Function`.
 
 Pass `--methods ./methods.js` and the emitter compiles the semantic actions to
 source as well. When every action compiles, the `json-logic-engine` import is
-dropped and the file's only dependency is `jl-grammar/runtime`. Actions that
+dropped and the file's only dependency is `grammatik/runtime`. Actions that
 cannot be compiled — `reduce`, `map` and `merge` become closures with no source
 to emit — fall back to shipping as data, one at a time.
 
@@ -375,11 +375,28 @@ deep-equal JSON Logic:
 
 ```
 6 rotating formulas                     1,393-character formula
-  jl-grammar (runtime)      3.56x         jl-grammar (runtime)      2.93x
-  jl-grammar (generated)    3.18x         jl-grammar (generated)    2.57x
+  grammatik (runtime)      3.56x         grammatik (runtime)      2.93x
+  grammatik (generated)    3.18x         grammatik (generated)    2.57x
   Chevrotain                1.46x         Chevrotain                1.25x
   Peggy                     1.00x         Peggy                     1.00x
 ```
+
+On Chevrotain's own JSON benchmark — its grammar, its samples, its rule that
+semantic actions do not count — against the hand-written recogniser it uses as a
+reference point:
+
+```
+1K sample                               10K sample
+  grammatik (generated)    1.39x         grammatik (generated)    1.40x
+  Chevrotain                1.37x         Chevrotain                1.34x
+  hand-written              1.00x         hand-written              1.00x
+  Peggy (generated)         0.29x         Peggy (generated)         0.24x
+```
+
+`npm run bench:json-parsers` runs it; `bench/jsonParsers/README.md` covers the
+methodology and what is ported from where. Note the margin over Chevrotain is
+much narrower there than below, because that benchmark builds no value — the
+difference between the two is semantic actions.
 
 `npm run bench` compares against Chevrotain on JSON; `npm run bench:formula` and
 `npm run bench:generated` run the comparisons above. Both rivals live in this
@@ -412,7 +429,7 @@ src/plan.js       Specializes a grammar into closures
 src/codegen.js    Generates a JavaScript function per rule
 src/emit.js       Writes a grammar out as a module
 src/definition.js The grammar-definition language
-src/methodsblock.js The `methods { ... }` block a .jlg can carry
+src/methodsblock.js The `methods { ... }` block a .gram can carry
 src/parser.js     createParser
 src/runtime.js    The surface a generated module imports
 types/            Hand-written declarations, copied to dist/types by the build

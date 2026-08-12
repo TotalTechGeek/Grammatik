@@ -1,5 +1,5 @@
 /**
- * Type declarations for jl-grammar.
+ * Type declarations for grammatik.
  *
  * Hand-written rather than inferred: JSON Logic is `any` by construction, so
  * generated declarations would say `any` everywhere the interesting shapes are.
@@ -50,7 +50,7 @@ export interface GrammarSpec {
   start: string
   /** Recorded in a generated file's header; also the default `moduleName`. */
   name?: string
-  /** A .jlg file's `methods { ... }` block, as source. */
+  /** A .gram file's `methods { ... }` block, as source. */
   methodsBlock?: string
 }
 
@@ -130,7 +130,7 @@ export interface EmitOptions extends ParserOptions {
   format?: 'esm' | 'cjs'
   /** Name recorded in the file header. Defaults to `spec.name`. */
   moduleName?: string
-  /** What the file imports the runtime from. Defaults to `jl-grammar/runtime`. */
+  /** What the file imports the runtime from. Defaults to `grammatik/runtime`. */
   runtimeSpecifier?: string
   /** What the file imports the engine from, when it still needs one. */
   engineSpecifier?: string

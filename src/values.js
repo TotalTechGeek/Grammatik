@@ -7,7 +7,7 @@
  * Deliberately a module of its own with no imports. It is needed in four places
  * — `createParser`'s engine, the emitter's compile engine, and the engine a
  * generated module builds when it still has one — and the last of those reaches
- * it through `jl-grammar/runtime`, which must not grow a dependency on the
+ * it through `grammatik/runtime`, which must not grow a dependency on the
  * planner or the analyzer to get here.
  */
 

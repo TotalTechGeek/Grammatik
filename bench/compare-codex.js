@@ -51,8 +51,8 @@ const runCodex = (parser, text) => {
 for (const [label, payload] of [['small', small], ['large', large]]) {
   const expected = JSON.stringify(JSON.parse(payload))
   const checks = [
-    ['jl-grammar (compiled)', () => mine.parse(payload)],
-    ['jl-grammar (interpreted)', () => mineInterpreted.parse(payload)],
+    ['grammatik (compiled)', () => mine.parse(payload)],
+    ['grammatik (interpreted)', () => mineInterpreted.parse(payload)],
     ['codex (compiled)', () => runCodex(codex, payload)],
     ['codex (interpreted)', () => runCodex(codexInterpreted, payload)],
     ['chevrotain', () => chevrotainJson.parse(payload)]
@@ -70,26 +70,26 @@ console.log('all parsers produce identical output\n')
 report('JSON, small document (lex + parse + build value)', [
   measure('JSON.parse (native)', () => JSON.parse(small)),
   measure('chevrotain', () => chevrotainJson.parse(small)),
-  measure('jl-grammar (compiled)', () => mine.parse(small)),
+  measure('grammatik (compiled)', () => mine.parse(small)),
   measure('codex (compiled)', () => runCodex(codex, small)),
-  measure('jl-grammar (interpreted)', () => mineInterpreted.parse(small)),
+  measure('grammatik (interpreted)', () => mineInterpreted.parse(small)),
   measure('codex (interpreted)', () => runCodex(codexInterpreted, small))
-], 'jl-grammar (compiled)')
+], 'grammatik (compiled)')
 
 report('JSON, large document (lex + parse + build value)', [
   measure('JSON.parse (native)', () => JSON.parse(large)),
   measure('chevrotain', () => chevrotainJson.parse(large)),
-  measure('jl-grammar (compiled)', () => mine.parse(large)),
+  measure('grammatik (compiled)', () => mine.parse(large)),
   measure('codex (compiled)', () => runCodex(codex, large)),
-  measure('jl-grammar (interpreted)', () => mineInterpreted.parse(large)),
+  measure('grammatik (interpreted)', () => mineInterpreted.parse(large)),
   measure('codex (interpreted)', () => runCodex(codexInterpreted, large))
-], 'jl-grammar (compiled)')
+], 'grammatik (compiled)')
 
 report('JSON, large document — lexing only', [
   measure('chevrotain lexer', () => chevrotainJson.lexer.tokenize(large)),
-  measure('jl-grammar lexer', () => mine.tokenize(large)),
+  measure('grammatik lexer', () => mine.tokenize(large)),
   measure('codex lexer', () => codex.tokenize(large))
-], 'jl-grammar lexer')
+], 'grammatik lexer')
 
 // ------------------------------------------------------------- arithmetic ---
 
@@ -110,8 +110,8 @@ if (myCalcResult !== expectedCalc || codexCalcResult !== expectedCalc) {
 console.log(`\narithmetic grammars agree (= ${expectedCalc})`)
 
 report('Arithmetic expressions (action on every node)', [
-  measure('jl-grammar (compiled)', () => myCalc.parse(calcInput)),
+  measure('grammatik (compiled)', () => myCalc.parse(calcInput)),
   measure('codex (compiled)', () => runCodex(codexCalc, calcInput))
-], 'jl-grammar (compiled)')
+], 'grammatik (compiled)')
 
 console.log()

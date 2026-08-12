@@ -4,3 +4,7 @@ node_modules
 # Build output, produced by `npm run build`; published, not committed
 dist/
 *.tgz
+
+# A local port of Chevrotain's benchmark: vendored third-party grammar,
+# samples and reference parser. Useful here, not ours to redistribute.
+bench/jsonParsers/

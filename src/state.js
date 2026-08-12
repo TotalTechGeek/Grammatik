@@ -6,7 +6,7 @@
  * stays free to legitimately produce `null`/`undefined`, and nothing in JSON
  * Logic can forge it.
  */
-export const FAIL = Symbol('jl-grammar.fail')
+export const FAIL = Symbol('grammatik.fail')
 
 /**
  * One mutable object threaded through the whole parse as the JSON Logic

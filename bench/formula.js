@@ -52,9 +52,9 @@ const compiledFull = createFormulaParser({ ...options, positions: 'full' })
 const interpreted = createFormulaParser({ ...options, execution: 'interpreted', positions: 'offset' })
 
 const parsers = {
-  'jl-grammar (generated, offsets)': (source) => compiled.parse(source),
-  'jl-grammar (generated, full pos)': (source) => compiledFull.parse(source),
-  'jl-grammar (interpreted, no eval)': (source) => interpreted.parse(source),
+  'grammatik (generated, offsets)': (source) => compiled.parse(source),
+  'grammatik (generated, full pos)': (source) => compiledFull.parse(source),
+  'grammatik (interpreted, no eval)': (source) => interpreted.parse(source),
   'Peggy (generated)': (source) => peggy.parse(source, options),
   'Chevrotain (hand-written)': (source) => compileChevrotain(source, options)
 }

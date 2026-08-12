@@ -48,8 +48,8 @@ for (let i = 0; i < longParts.length; i++) {
 const longSample = longParts.join(' + ')
 
 const parsers = {
-  'jl-grammar (generated file)': (source) => generated.parse(source),
-  'jl-grammar (built at runtime)': (source) => runtime.parse(source),
+  'grammatik (generated file)': (source) => generated.parse(source),
+  'grammatik (built at runtime)': (source) => runtime.parse(source),
   'Peggy (generated file)': (source) => peggy.parse(source, options),
   'Chevrotain (hand-written)': (source) => compileChevrotain(source, options)
 }

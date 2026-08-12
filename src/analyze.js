@@ -263,7 +263,7 @@ function isPlainParser (node) {
   return op !== null && op !== 'label' && op !== 'action'
 }
 
-const BAIL = Symbol('jl-grammar.bail')
+const BAIL = Symbol('grammatik.bail')
 
 /**
  * Rewrites logic that reads `name` from its enclosing sequence's bindings into

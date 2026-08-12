@@ -36,7 +36,7 @@ const runtimeUrl = pathToFileURL(path.resolve('src/runtime.js')).href
 
 /**
  * Same as `load`, for CommonJS. The published package resolves
- * `jl-grammar/runtime` to a CommonJS build; here that build is made on the spot,
+ * `grammatik/runtime` to a CommonJS build; here that build is made on the spot,
  * so the emitted file is required exactly the way a consumer's would be.
  */
 async function loadCjs (grammar, options = {}, methods) {
@@ -51,7 +51,7 @@ async function loadCjs (grammar, options = {}, methods) {
 }
 
 beforeAll(async () => {
-  dir = await mkdtemp(path.join(tmpdir(), 'jl-grammar-emit-'))
+  dir = await mkdtemp(path.join(tmpdir(), 'grammatik-emit-'))
   // A CommonJS build of the runtime, so an emitted `.cjs` parser can require it
   // the way the published package's `require` condition would.
   const { build } = await import('esbuild')

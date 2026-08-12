@@ -76,10 +76,11 @@ function mayReturnContext (logic) {
 
 /**
  * @param {{ engine: any, rules: Record<string, any>, firsts: Map<string, any>|null,
- *           memo: boolean, maxSteps: number, unsafeEval?: boolean }} config
+ *           memo: boolean, maxSteps: number, unsafeEval?: boolean,
+ *           tokenIds?: Map<string, number>|null }} config
  */
 export function createPlanner (config) {
-  const { engine, rules, firsts, memo, maxSteps, unsafeEval = true } = config
+  const { engine, rules, firsts, memo, maxSteps, unsafeEval = true, tokenIds = null } = config
 
   /** @type {Map<string, { fn: ((state: any) => any) | null }>} */
   const slots = new Map()
@@ -227,9 +228,14 @@ export function createPlanner (config) {
   /** @returns {(state: any) => any} */
   const buildConsume = (arg) => {
       const name = typeof arg === 'string' ? arg : arg[0]
+      const id = tokenIds ? tokenIds.get(name) : undefined
+      // `token.id` is undefined only for a hand-built token that bypassed
+      // `createLexer` (parseTokens accepts any array shaped like a Token), in
+      // which case falling back to the string compare keeps that documented
+      // path working; every token this parser's own lexer produces has an id.
       return (state) => {
         const token = state.tokens[state.idx]
-        if (token !== undefined && token.type === name) {
+        if (token !== undefined && (token.id === id || (token.id === undefined && token.type === name))) {
           state.idx++
           return token
         }
@@ -348,10 +354,11 @@ export function createPlanner (config) {
       // Terser than an `alt` of `consume`s, and a single set lookup.
       const names = Array.isArray(arg) ? arg : [arg]
       const set = new Set(names)
+      const idSet = tokenIds ? new Set(names.map((n) => tokenIds.get(n))) : null
       const count = names.length
       return (state) => {
         const token = state.tokens[state.idx]
-        if (token !== undefined && set.has(token.type)) {
+        if (token !== undefined && (idSet ? (token.id !== undefined ? idSet.has(token.id) : set.has(token.type)) : set.has(token.type))) {
           state.idx++
           return token
         }
@@ -700,6 +707,7 @@ export function createPlanner (config) {
     const kinds = []
     const names = []     // binding name, for the labelled kinds
     const tokens = []    // token type, for the terminal kinds
+    const tokenIdList = [] // token.id equivalent of `tokens`, for the terminal kinds
     const fns = []
     const actionLogic = []   // raw logic of each action child, for the reuse check
     let hasAction = false
@@ -724,11 +732,13 @@ export function createPlanner (config) {
           kinds.push(LABELLED_TERMINAL)
           names.push(name)
           tokens.push(terminal)
+          tokenIdList.push(tokenIds ? tokenIds.get(terminal) : undefined)
           fns.push(null)
         } else {
           kinds.push(LABELLED)
           names.push(name)
           tokens.push(null)
+          tokenIdList.push(undefined)
           fns.push(plan(inner))
         }
         continue
@@ -738,6 +748,7 @@ export function createPlanner (config) {
         kinds.push(ACTION)
         names.push(null)
         tokens.push(null)
+        tokenIdList.push(undefined)
         fns.push(planAction(child.action))
         actionLogic.push(child.action)
         hasAction = true
@@ -749,11 +760,13 @@ export function createPlanner (config) {
         kinds.push(TERMINAL)
         names.push(null)
         tokens.push(terminal)
+        tokenIdList.push(tokenIds ? tokenIds.get(terminal) : undefined)
         fns.push(null)
       } else {
         kinds.push(PARSER)
         names.push(null)
         tokens.push(null)
+        tokenIdList.push(undefined)
         fns.push(plan(child))
       }
     }
@@ -803,7 +816,7 @@ export function createPlanner (config) {
 
         if (kind === TERMINAL || kind === LABELLED_TERMINAL) {
           const token = state.tokens[state.idx]
-          if (token !== undefined && token.type === tokens[i]) {
+          if (token !== undefined && (token.id === tokenIdList[i] || (token.id === undefined && token.type === tokens[i]))) {
             state.idx++
             value = token
           } else {

@@ -139,9 +139,13 @@ export function emitModule (spec, options = {}) {
   // The planner is needed only so codegen can record what each helper is; the
   // closures it makes are thrown away.
   const firsts = ll1 ? analysis.firsts : null
+  // The generated file's own `createLexer(tokenDefs, ...)` call assigns the same
+  // ids, from the same `tokenDefs` array in the same order — see the matching
+  // comment in parser.js.
+  const tokenIds = new Map(lexer.tokenNames.map((name, id) => [name, id]))
   const engine = { build: () => { throw new Error('not compiled during emit') }, run: () => {} }
-  const planner = createPlanner({ engine, rules, firsts, memo, maxSteps, unsafeEval: false })
-  const codegen = createCodegen({ planner, rules, firsts, memo, maxSteps })
+  const planner = createPlanner({ engine, rules, firsts, memo, maxSteps, unsafeEval: false, tokenIds })
+  const codegen = createCodegen({ planner, rules, firsts, memo, maxSteps, tokenIds })
 
   codegen.compile(start)
 

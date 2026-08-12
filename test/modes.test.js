@@ -42,7 +42,7 @@ describe('a grammar with one mode is untouched', () => {
   it('lexes exactly as before', () => {
     const tokens = createLexer(defs).tokenize('1 + 22')
     expect(typesOf(tokens)).toEqual(['Int', 'Plus', 'Int'])
-    expect(tokens[2]).toEqual({ type: 'Int', image: '22', start: 4, end: 6, line: 1, col: 5 })
+    expect(tokens[2]).toEqual({ type: 'Int', id: 1, image: '22', start: 4, end: 6, line: 1, col: 5 })
   })
 
   it('says nothing about modes in its errors', () => {

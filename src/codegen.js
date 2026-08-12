@@ -23,10 +23,23 @@ import { buildDispatch, opOf, recognizeSeqIdiom } from './analyze.js'
 
 /**
  * @param {{ planner: any, rules: Record<string, any>, firsts: Map<string, any>|null,
- *           memo: boolean, maxSteps: number }} config
+ *           memo: boolean, maxSteps: number, tokenIds?: Map<string, number>|null }} config
  */
 export function createCodegen (config) {
-  const { planner, rules, firsts, memo, maxSteps } = config
+  const { planner, rules, firsts, memo, maxSteps, tokenIds = null } = config
+
+  /**
+   * `token.id === <n>` is an integer compare instead of a string compare, and
+   * is what generated code prefers wherever a token's declared type matters.
+   * Falls back to `token.type === <name>` only for a hand-built token that
+   * bypassed this parser's own lexer (`parseTokens` accepts anything shaped
+   * like a Token) — every token the bundled lexer produces has an id.
+   */
+  const typeCheck = (tokenVar, name) => {
+    const id = tokenIds ? tokenIds.get(name) : undefined
+    if (id === undefined) return `${tokenVar}.type === ${JSON.stringify(name)}`
+    return `(${tokenVar}.id === ${id} || (${tokenVar}.id === undefined && ${tokenVar}.type === ${JSON.stringify(name)}))`
+  }
 
   /** Runtime values the generated code closes over. */
   const HELPERS = []
@@ -99,7 +112,7 @@ export function createCodegen (config) {
         out.push(
           `let ${result};`,
           `const ${token} = c.tokens[c.idx];`,
-          `if (${token} !== undefined && ${token}.type === ${JSON.stringify(name)}) { c.idx++; ${result} = ${token}; }`,
+          `if (${token} !== undefined && ${typeCheck(token, name)}) { c.idx++; ${result} = ${token}; }`,
           `else { E(c, ${JSON.stringify(name)}); ${result} = F; }`
         )
         return result
@@ -212,7 +225,7 @@ export function createCodegen (config) {
       case 'oneOf': {
         const names = Array.isArray(arg) ? arg : [arg]
         const token = nextId()
-        const test = names.map((n) => `${token}.type === ${JSON.stringify(n)}`).join(' || ')
+        const test = names.map((n) => typeCheck(token, n)).join(' || ')
         out.push(
           `let ${result};`,
           `const ${token} = c.tokens[c.idx];`,

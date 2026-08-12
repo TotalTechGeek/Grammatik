@@ -24,6 +24,12 @@ import { firstCharSet } from './firstchars.js'
 /**
  * @typedef {object} Token
  * @property {string} type
+ * @property {number} id     The token definition's declaration index. Not part
+ *                           of the public contract of a token — internal
+ *                           combinators use it as a faster stand-in for `type`
+ *                           (an integer compare and an array index instead of a
+ *                           string compare and a property lookup); `type` is
+ *                           what a grammar author's code should read.
  * @property {string} image
  * @property {number} start
  * @property {number} end
@@ -109,7 +115,7 @@ export function createLexer (defs, options = {}) {
   }
   for (const def of defs) for (const mode of modesOf(def)) idOf(mode)
 
-  const compiled = defs.map((def) => {
+  const compiled = defs.map((def, id) => {
     if (!def.name) throw new Error('createLexer: every token definition needs a name')
     if (!def.pattern && !def.literal) throw new Error(`createLexer: token '${def.name}' needs a pattern or a literal`)
     if (def.pattern && def.literal) throw new Error(`createLexer: token '${def.name}' has both a pattern and a literal; pick one`)
@@ -128,6 +134,11 @@ export function createLexer (defs, options = {}) {
 
     return {
       name: def.name,
+      // The declaration index. `createParser` derives the identical mapping
+      // from `tokenNames` independently (same array, same order), so a
+      // combinator that resolves a `consume` target's id at build time agrees
+      // with what a token actually carries without the two ever comparing notes.
+      id,
       skip: !!def.skip,
       literal: def.literal,
       longerAlt: def.longerAlt || null,
@@ -287,6 +298,7 @@ export function createLexer (defs, options = {}) {
           // monomorphic regardless of the position mode.
           tokens.push({
             type: winner.name,
+            id: winner.id,
             image,
             start: offset,
             end,

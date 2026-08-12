@@ -11,9 +11,9 @@ describe('createLexer', () => {
   it('produces tokens with positions', () => {
     const { tokenize } = createLexer(defs)
     expect(tokenize('12 + 3')).toEqual([
-      { type: 'Int', image: '12', start: 0, end: 2, line: 1, col: 1 },
-      { type: 'Plus', image: '+', start: 3, end: 4, line: 1, col: 4 },
-      { type: 'Int', image: '3', start: 5, end: 6, line: 1, col: 6 }
+      { type: 'Int', id: 1, image: '12', start: 0, end: 2, line: 1, col: 1 },
+      { type: 'Plus', id: 2, image: '+', start: 3, end: 4, line: 1, col: 4 },
+      { type: 'Int', id: 1, image: '3', start: 5, end: 6, line: 1, col: 6 }
     ])
   })
 

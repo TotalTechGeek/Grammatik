@@ -28,6 +28,31 @@ describe('consume', () => {
   it('accepts the array spelling', () => {
     expect(parserFor({ consume: ['Int'] }).parse('7').image).toBe('7')
   })
+
+  // `parseTokens` accepts any array shaped like a Token, not only ones this
+  // parser's own lexer produced — a hand-built token has no `id`, and the fast
+  // path must fall back to comparing `type` rather than silently failing to
+  // match. Exercised under both execution modes, since each has its own
+  // comparison.
+  for (const execution of ['generated', 'interpreted']) {
+    it(`matches a hand-built token with no id (${execution})`, () => {
+      const p = parserFor({ consume: 'Int' }, { execution })
+      const handBuilt = { type: 'Int', image: '9', start: 0, end: 1, line: 1, col: 1 }
+      expect(p.parseTokens([handBuilt]).image).toBe('9')
+    })
+
+    it(`still rejects a hand-built token of the wrong type (${execution})`, () => {
+      const p = parserFor({ consume: 'Int' }, { execution })
+      const handBuilt = { type: 'Word', image: 'x', start: 0, end: 1, line: 1, col: 1 }
+      expect(() => p.parseTokens([handBuilt])).toThrow(/Expecting Int/)
+    })
+
+    it(`dispatches a oneOf over hand-built tokens with no id (${execution})`, () => {
+      const p = parserFor({ oneOf: ['Comma', 'Semi'] }, { execution })
+      const handBuilt = { type: 'Semi', image: ';', start: 0, end: 1, line: 1, col: 1 }
+      expect(p.parseTokens([handBuilt]).image).toBe(';')
+    })
+  }
 })
 
 describe('seq', () => {

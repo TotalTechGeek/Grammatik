@@ -114,9 +114,16 @@ export function createParser (spec, options = {}) {
   const startRule = rules[start]
   const firsts = ll1 ? analysis.firsts : null
 
+  // Declaration index of each token name, the same numbering `createLexer`
+  // assigns to the tokens it produces (both derive it from the same array in
+  // the same order). `consume` compares this instead of the string `type`
+  // where it can — an integer compare instead of a string compare, on the
+  // hottest path in the parser.
+  const tokenIds = new Map(lexer.tokenNames.map((name, id) => [name, id]))
+
   // The planner specializes the grammar into closures; the combinators'
   // `compile` hooks reach it through the engine.
-  const planner = createPlanner({ engine, rules, firsts, memo, maxSteps, unsafeEval })
+  const planner = createPlanner({ engine, rules, firsts, memo, maxSteps, unsafeEval, tokenIds })
   engine.__jlGrammar = { planner }
 
   // Source generation emits one JS function per rule with every node inlined,
@@ -125,7 +132,7 @@ export function createParser (spec, options = {}) {
   // lands on the generated code rather than a method dispatch.
   // Code generation needs `new Function`, so it is off whenever eval is.
   const codegen = compile && unsafeEval
-    ? createCodegen({ planner, rules, firsts, memo, maxSteps })
+    ? createCodegen({ planner, rules, firsts, memo, maxSteps, tokenIds })
     : null
   const compiledStart = codegen && codegen.compile(start)
 

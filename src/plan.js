@@ -851,7 +851,28 @@ export function createPlanner (config) {
       // prototype also means a token type of `toString` or `constructor` cannot
       // find an inherited value.
       const byToken = Object.create(null)
-      for (const [token, branch] of table) byToken[token] = planned[branches.indexOf(branch)]
+      const groupClosures = new Map()
+      for (const [token, branch] of table) {
+        if (Array.isArray(branch)) {
+          let closure = groupClosures.get(branch)
+          if (closure === undefined) {
+            const group = branch.map((b) => planned[branches.indexOf(b)])
+            closure = (state) => {
+              const start = state.idx
+              for (let i = 0; i < group.length; i++) {
+                const value = group[i](state)
+                if (value !== FAIL) return value
+                state.idx = start
+              }
+              return FAIL
+            }
+            groupClosures.set(branch, closure)
+          }
+          byToken[token] = closure
+        } else {
+          byToken[token] = planned[branches.indexOf(branch)]
+        }
+      }
       const expectedTokens = [...table.keys()]
       const expectedCount = expectedTokens.length
 

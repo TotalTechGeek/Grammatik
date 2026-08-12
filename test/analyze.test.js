@@ -52,12 +52,34 @@ describe('buildDispatch', () => {
     expect([...table.keys()].sort()).toEqual(['Int', 'Word'])
   })
 
-  it('refuses when two branches share a first token', () => {
+  it('groups branches that share a first token, in original order, for ordered backtracking', () => {
     const branches = [
       { seq: [{ consume: 'Int' }, { consume: 'Comma' }] },
       { seq: [{ consume: 'Int' }, { consume: 'Plus' }] }
     ]
-    expect(buildDispatch(branches, run({ a: { alt: branches } }).firsts)).toBeNull()
+    const table = buildDispatch(branches, run({ a: { alt: branches } }).firsts)
+    expect(table).not.toBeNull()
+    expect(table.get('Int')).toEqual(branches)
+  })
+
+  it('keeps unambiguous tokens as a direct table entry alongside a collision group', () => {
+    const branches = [
+      { seq: [{ consume: 'Int' }, { consume: 'Comma' }] },
+      { seq: [{ consume: 'Int' }, { consume: 'Plus' }] },
+      { consume: 'Word' }
+    ]
+    const table = buildDispatch(branches, run({ a: { alt: branches } }).firsts)
+    expect(table.get('Int')).toEqual([branches[0], branches[1]])
+    expect(table.get('Word')).toBe(branches[2])
+  })
+
+  it('shares one array instance across tokens with an identical collision group', () => {
+    const branches = [
+      { alt: [{ consume: 'Int' }, { consume: 'Comma' }] },
+      { alt: [{ consume: 'Int' }, { consume: 'Comma' }] }
+    ]
+    const table = buildDispatch(branches, run({ a: { alt: branches } }).firsts)
+    expect(table.get('Int')).toBe(table.get('Comma'))
   })
 
   it('refuses when a branch is nullable', () => {

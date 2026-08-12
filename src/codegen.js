@@ -520,6 +520,26 @@ export function createCodegen (config) {
     return result
   }
 
+  /**
+   * Emits an inline ordered-backtracking block over `list`, into a fresh
+   * variable. Used both for a whole `alt` with no dispatch table, and for the
+   * residual subset of branches a dispatch table cannot separate by one
+   * token.
+   */
+  function genOrderedBacktrack (list, out, bindingsVar) {
+    const result = nextId()
+    const label = 'L' + nextId()
+    const start = nextId()
+    out.push(`let ${result};`, `${label}: {`, `const ${start} = c.idx;`)
+    for (const branch of list) {
+      out.push('{')
+      const value = gen(branch, out, bindingsVar)
+      out.push(`if (${value} !== F) { ${result} = ${value}; break ${label}; }`, `c.idx = ${start};`, '}')
+    }
+    out.push(`${result} = F;`, '}')
+    return result
+  }
+
   function genAlt (branches, out, result, bindingsVar) {
     if (!Array.isArray(branches)) throw new Error("'alt' expects an array of branches")
 
@@ -529,6 +549,9 @@ export function createCodegen (config) {
     if (table !== null) {
       // A switch on the token type: V8 turns a dense string switch into a
       // hash lookup with inlined bodies, and every branch is inlined here.
+      // A table value that is an array is a residual group — tokens shared by
+      // more than one branch — resolved by ordered backtracking over just
+      // that subset instead of a single inlined branch.
       const expected = [...table.keys()]
       const token = nextId()
       out.push(tickSrc, `let ${result};`, `${label}: {`, `const ${token} = c.tokens[c.idx];`)
@@ -542,7 +565,7 @@ export function createCodegen (config) {
       }
       for (const [branch, tokenNames] of byBranch) {
         out.push(tokenNames.map((t) => `case ${JSON.stringify(t)}:`).join(' ') + ' {')
-        const value = gen(branch, out, bindingsVar)
+        const value = Array.isArray(branch) ? genOrderedBacktrack(branch, out, bindingsVar) : gen(branch, out, bindingsVar)
         out.push(`${result} = ${value}; break ${label};`, '}')
       }
       out.push(
@@ -554,15 +577,8 @@ export function createCodegen (config) {
     }
 
     // Ordered backtracking, still fully inlined.
-    const start = nextId()
-    out.push(tickSrc, `let ${result};`, `${label}: {`, `const ${start} = c.idx;`)
-    for (const branch of branches) {
-      out.push('{')
-      const value = gen(branch, out, bindingsVar)
-      out.push(`if (${value} !== F) { ${result} = ${value}; break ${label}; }`, `c.idx = ${start};`, '}')
-    }
-    out.push(`${result} = F;`, '}')
-    return result
+    out.push(tickSrc)
+    return genOrderedBacktrack(branches, out, bindingsVar)
   }
 
   /** Generates and installs the function for one rule. */

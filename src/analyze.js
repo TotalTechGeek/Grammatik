@@ -573,30 +573,51 @@ export function analyze (grammar, options = {}) {
 }
 
 /**
- * Builds an O(1) dispatch table for an `alt`, or null when the branches are not
- * LL(1)-separable and we must fall back to ordered backtracking.
+ * Builds an O(1) dispatch table for an `alt`, or null when no branch has a
+ * known, non-nullable FIRST set (a nullable/opaque branch could match
+ * anything, so no table is safe at all).
+ *
+ * A token whose FIRST set membership is unique to one branch maps straight to
+ * that branch. A token shared by more than one branch — the choice needs more
+ * than one token of lookahead there — maps to an array of the colliding
+ * branches, in their original `alt` order; a caller resolves that case with
+ * ordered backtracking over just that subset, rather than over every branch.
+ * Equal-content collision groups are the same array instance, so a caller
+ * that dedupes on the table's values (e.g. to share generated code between
+ * case labels) gets that for free.
  *
  * @param {any[]} branches
  * @param {Map<string, First>} firsts
  * @returns {Map<string, any>|null}
  */
 export function buildDispatch (branches, firsts) {
-  /** @type {Map<string, any>} */
-  const table = new Map()
-
-  for (const branch of branches) {
-    const first = firstOf(branch, firsts)
-    // A nullable or opaque branch could match anything, so no table is safe.
+  const perBranch = branches.map((branch) => firstOf(branch, firsts))
+  for (const first of perBranch) {
     if (first.nullable || first.unknown || first.tokens.size === 0) return null
-    for (const token of first.tokens) {
-      // Overlapping FIRST sets mean the choice needs more than one token of
-      // lookahead; ordered backtracking still handles it correctly.
-      if (table.has(token)) return null
-      table.set(token, branch)
-    }
   }
 
-  return table.size > 0 ? table : null
+  /** @type {Map<string, any[]>} */
+  const byToken = new Map()
+  for (let i = 0; i < branches.length; i++) {
+    for (const token of perBranch[i].tokens) {
+      let list = byToken.get(token)
+      if (list === undefined) { list = []; byToken.set(token, list) }
+      list.push(branches[i])
+    }
+  }
+  if (byToken.size === 0) return null
+
+  const canonical = new Map()
+  const table = new Map()
+  for (const [token, list] of byToken) {
+    if (list.length === 1) { table.set(token, list[0]); continue }
+    const key = list.map((branch) => branches.indexOf(branch)).join(',')
+    let group = canonical.get(key)
+    if (group === undefined) { group = list; canonical.set(key, group) }
+    table.set(token, group)
+  }
+
+  return table
 }
 
 export { firstOf }

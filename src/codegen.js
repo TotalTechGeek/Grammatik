@@ -568,19 +568,39 @@ export function createCodegen (config) {
       // A table value that is an array is a residual group — tokens shared by
       // more than one branch — resolved by ordered backtracking over just
       // that subset instead of a single inlined branch.
+      //
+      // Switching on token.id (an integer) instead of token.type (a string)
+      // when every expected token resolves to one — a numeric switch is a jump
+      // table without even the string-hashing step a dense string switch still
+      // does. `I[token.type]` is the same fallback typeCheck uses: a hand-built
+      // token from parseTokens has no id, and I is a name -> id table built
+      // once from the same tokenIds this parser resolved every other id from.
       const expected = [...table.keys()]
+      const expectedIds = tokenIds ? expected.map((t) => tokenIds.get(t)) : null
+      const numeric = expectedIds !== null && expectedIds.every((id) => id !== undefined)
       const token = nextId()
       out.push(tickSrc, `let ${result};`, `${label}: {`, `const ${token} = c.tokens[c.idx];`)
       out.push(`if (${token} === undefined) { ${expected.map((t) => `E(c, ${JSON.stringify(t)});`).join(' ')} ${result} = F; break ${label}; }`)
-      out.push(`switch (${token}.type) {`)
+
+      let discriminant
+      if (numeric) {
+        discriminant = nextId()
+        out.push(`const ${discriminant} = ${token}.id !== undefined ? ${token}.id : I[${token}.type];`)
+        out.push(`switch (${discriminant}) {`)
+      } else {
+        discriminant = `${token}.type`
+        out.push(`switch (${discriminant}) {`)
+      }
 
       const byBranch = new Map()
-      for (const [tokenName, branch] of table) {
+      for (const tokenName of expected) {
+        const branch = table.get(tokenName)
         if (!byBranch.has(branch)) byBranch.set(branch, [])
         byBranch.get(branch).push(tokenName)
       }
+      const caseLabel = (t) => numeric ? tokenIds.get(t) : JSON.stringify(t)
       for (const [branch, tokenNames] of byBranch) {
-        out.push(tokenNames.map((t) => `case ${JSON.stringify(t)}:`).join(' ') + ' {')
+        out.push(tokenNames.map((t) => `case ${caseLabel(t)}:`).join(' ') + ' {')
         const value = Array.isArray(branch) ? genOrderedBacktrack(branch, out, bindingsVar) : gen(branch, out, bindingsVar)
         out.push(`${result} = ${value}; break ${label};`, '}')
       }
@@ -597,6 +617,9 @@ export function createCodegen (config) {
     return genOrderedBacktrack(branches, out, bindingsVar)
   }
 
+  /** Name -> id, for a generated switch's runtime fallback when token.id is missing. */
+  const idByName = tokenIds ? Object.fromEntries(tokenIds) : null
+
   /** Generates and installs the function for one rule. */
   function buildRule (name) {
     const out = []
@@ -608,8 +631,8 @@ export function createCodegen (config) {
     SOURCES[ruleIndex.get(name)] = body
     const source = `return ${body}`
     // eslint-disable-next-line no-new-func
-    const factory = new Function('F', 'E', 'P', 'T', 'R', 'H', source)
-    return factory(FAIL, expect, progressError, stepsError, RULES, HELPERS)
+    const factory = new Function('F', 'E', 'P', 'T', 'R', 'H', 'I', source)
+    return factory(FAIL, expect, progressError, stepsError, RULES, HELPERS, idByName)
   }
 
   function progressError (op, at) {

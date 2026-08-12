@@ -339,6 +339,14 @@ const H = [
 ${helpers.map((source, index) => `  /* ${index} */ ${source}`).join(',\n')}
 ]
 
+/**
+ * Name -> id, the same numbering \`lexer\` assigns. A generated \`alt\`'s switch
+ * dispatches on a token's id when it has one; this is only read as a fallback,
+ * for a hand-built token from \`parseTokens\` that bypassed this file's own
+ * lexer and so has no id of its own.
+ */
+const I = ${literal(Object.fromEntries(tokenIds))}
+
 ${ruleSources}
 
 const RULES = ${literal(Object.fromEntries(reached.map(([name, index]) => [name, index])))}

@@ -110,6 +110,24 @@ describe('alt', () => {
     })
     expect(p.parse('1')).toBe('first')
   })
+
+  // { consume: 'Int' } vs { consume: 'Word' } have disjoint FIRST sets, so
+  // this alt gets an LL(1) dispatch table — generated code switches on
+  // token.id, falling back to a name -> id lookup for a hand-built token
+  // that bypassed this parser's own lexer and so has no id of its own.
+  for (const execution of ['generated', 'interpreted']) {
+    it(`dispatches on a hand-built token with no id (${execution})`, () => {
+      const p = parserFor({ alt: [{ consume: 'Int' }, { consume: 'Word' }] }, { execution })
+      const handBuilt = { type: 'Word', image: 'hi', start: 0, end: 2, line: 1, col: 1 }
+      expect(p.parseTokens([handBuilt]).type).toBe('Word')
+    })
+
+    it(`still reports every acceptable token for a hand-built token that matches nothing (${execution})`, () => {
+      const p = parserFor({ alt: [{ consume: 'Int' }, { consume: 'Word' }] }, { execution })
+      const handBuilt = { type: 'Comma', image: ',', start: 0, end: 1, line: 1, col: 1 }
+      expect(() => p.parseTokens([handBuilt])).toThrow(/one of \[Int, Word\]/)
+    })
+  }
 })
 
 describe('many / many1', () => {

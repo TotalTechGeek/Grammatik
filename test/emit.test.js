@@ -289,9 +289,10 @@ describe('actions compiled to source', () => {
   })
 
   it('emits without methods, falling back rather than failing', async () => {
-    // No methods supplied: the emitter cannot compile calls it knows nothing
-    // about, so those actions ship as data.
-    const { source } = await load(formulaGrammar, {})
+    // No methods supplied and no block to find them in: the emitter cannot
+    // compile calls it knows nothing about, so those actions ship as data.
+    const { methodsBlock, ...withoutBlock } = formulaGrammar
+    const { source } = await load(withoutBlock, {})
     expect(source).toMatch(/^import .*json-logic-engine/m)
     expect(source).toMatch(/\baction\(\{/)
   })

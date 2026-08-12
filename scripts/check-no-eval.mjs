@@ -15,9 +15,7 @@
 import { readFile } from 'node:fs/promises'
 import assert from 'node:assert/strict'
 
-import { createParser } from '../src/index.js'
-import { createFormulaParser } from '../examples/formula.js'
-import { createDefinitionParser } from '../src/index.js'
+import { createParser, createDefinitionParser, parseDefinition, evaluateMethodsBlock } from '../src/index.js'
 import { grammar as jsonGrammar, methods as jsonMethods } from '../examples/json.js'
 
 assert.throws(() => new Function('return 1'), 'code generation must be blocked for this check to mean anything')
@@ -30,16 +28,27 @@ assert.deepEqual(json.parse('{"a":[1,true,null,"x"],"b":{"c":-1.5e3}}'), { a: [1
 assert.equal(json.compiled, false, "execution: 'interpreted' must not generate rule functions")
 checks.push('JSON grammar')
 
-// The formula grammar: 36 semantic actions, all interpreted here.
-const formula = createFormulaParser({
-  functions: new Set(['SUM', 'IF', 'ABS']),
-  unaryFunctions: new Set(['ABS']),
+// A grammar read from a `.jlg` at run time, with methods supplied by the host:
+// 30-odd rules and every action interpreted, none of it generating code.
+const jsonSource = await readFile(new URL('../examples/json.jlg', import.meta.url), 'utf8')
+const fromFile = createParser(parseDefinition(jsonSource, { execution: 'interpreted' }), {
+  methods: jsonMethods,
   execution: 'interpreted'
 })
-assert.deepEqual(formula.parse('IF(A1>=10,SUM(B1:B5),ABS(C1))'), {
-  IF: [{ '>=': [{ val: 'A1' }, 10] }, { SUM: [{ RANGE: ['B1', 'B5'] }] }, { ABS: { val: 'C1' } }]
-})
-checks.push('formula grammar')
+assert.deepEqual(fromFile.parse('{"a":[1,{"b":null}],"c":true}'), { a: [1, { b: null }], c: true })
+checks.push('a .jlg parsed and run as data')
+
+// A `methods { ... }` block is the one part of a `.jlg` that cannot be used
+// here: turning it into functions needs `new Function`. That is why
+// `examples/formula.js` is not imported by this script, and why blocks are
+// documented as a build-time feature — `jl-grammar generate` writes the block
+// out as source, and the resulting parser needs no eval at all.
+const formulaSource = await readFile(new URL('../examples/formula.jlg', import.meta.url), 'utf8')
+const formulaGrammar = parseDefinition(formulaSource, { execution: 'interpreted' })
+assert.ok(formulaGrammar.methodsBlock, 'the formula grammar should carry a methods block')
+assert.equal(formulaGrammar.rules.Formula.seq.length, 3, 'the grammar itself still parses without eval')
+assert.throws(() => evaluateMethodsBlock(formulaGrammar.methodsBlock), /Code generation/)
+checks.push('a methods block refused, as documented')
 
 // The grammar-definition language, then a grammar loaded from a file as data.
 const meta = createDefinitionParser({ execution: 'interpreted' })

@@ -1,8 +1,8 @@
 // Sheetlang, written in the grammar-definition language (see src/definition.js).
-// Every action is JSON Logic data; this file contains no executable JavaScript.
 //
-// This file is the grammar. `formula.js` beside it loads this and adds the
-// semantic methods — there is no second copy of the rules to keep in step.
+// The whole language is this one file: tokens, rules, JSON Logic actions, and —
+// in the `methods` block at the end — the JavaScript those actions call.
+// `formula.js` beside it only loads this and hands back a parser.
 //
 // Nodes are built with `obj`, which takes flat key/value pairs, so the operator
 // an expression produces can come from the input: `{"obj": [{"val": "op"}, ...]}`
@@ -240,3 +240,98 @@ rule PathSegment = alt(
 );
 
 rule Name = alt(consume(Identifier), consume(Cell));
+
+// -- semantics ---------------------------------------------------------------
+//
+// The JavaScript the actions above call. What is left here is the part that
+// genuinely needs it: string manipulation, two conditionals, and the recursive
+// rebuild of a path containing `[*]`. Building a node whose key comes from the
+// input is not on that list any more — `obj` does that as data.
+
+methods {
+  const WILDCARD = Object.freeze({ wildcard: true })
+
+  /**
+   * The accepted function names, and the ones emitted in the collapsed
+   * `{ ABS: x }` form. Set by `configure`; a parser's methods are registered
+   * once, so this is where per-caller options land.
+   */
+  let functions = null
+  let unaryFunctions = null
+
+  const toSet = (names) => names && new Set(Array.from(names, (name) => String(name).toUpperCase()))
+
+  /** @param {{ functions?: Iterable<string>, unaryFunctions?: Iterable<string> }} [options] */
+  export function configure (options = {}) {
+    functions = toSet(options.functions)
+    unaryFunctions = toSet(options.unaryFunctions)
+  }
+
+  const val = (path) => ({ val: path.length === 1 ? path[0] : path })
+
+  /** A path containing `[*]` becomes a `merge`/`map` over the segment before it. */
+  function reference (path) {
+    let wildcard = -1
+    for (let index = 0; index < path.length; index++) {
+      if (path[index] === WILDCARD) { wildcard = index; break }
+    }
+    if (wildcard === -1) return val(path)
+    const source = val(path.slice(0, wildcard))
+    const rest = path.slice(wildcard + 1)
+    return rest.length ? { merge: { map: [source, reference(rest)] } } : { merge: source }
+  }
+
+  const image = (value) => value && typeof value === 'object' && 'image' in value ? value.image : value
+
+  const helpers = {
+    operator: (image) => ({ '=': '==', '<>': '!=', '<': '<', '<=': '<=', '>': '>', '>=': '>=' })[image],
+    // `a & b & c` is one CONCAT of three, not two nested ones.
+    concat2: ([left, right]) => (left && typeof left === 'object' && Array.isArray(left.CONCAT)
+      ? { CONCAT: left.CONCAT.concat([right]) }
+      : { CONCAT: [left, right] }),
+    unary: ([op, operand]) => (op === '-' ? { '-': [operand] } : operand),
+    call: ([rawName, args]) => {
+      const name = rawName.toUpperCase()
+      if (functions && !functions.has(name)) throw new Error(`Unknown function ${name}`)
+      if (unaryFunctions && args.length === 1 && !Array.isArray(args[0]) && unaryFunctions.has(name)) return { [name]: args[0] }
+      return { [name]: args }
+    },
+    functionName: ([head, tail]) => {
+      let output = head.image
+      for (let index = 0; index < tail.length; index++) output += `.${tail[index].image}`
+      return output
+    },
+    arguments: ([head, tail]) => tail.length === 0 && head === null ? [] : [head, ...tail],
+    number: (text) => Number.parseFloat(text),
+    string: (text) => text.slice(1, -1).replace(/""/g, '"'),
+    boolean: (text) => text.toUpperCase() === 'TRUE',
+    array: (rows) => ({ preserve: rows.length === 1 ? rows[0] : rows }),
+    list: ([head, tail]) => [head, ...tail],
+    negativeNumber: (number) => -number,
+    range: ([scope, start, end]) => scope ? { RANGE: [start, end, { preserve: scope }] } : { RANGE: [start, end] },
+    directReference: ([scope, address]) => val([...(scope || []), address]),
+    scopedPath: ([scope, path]) => reference(scope.concat(path)),
+    pathReference: (path) => reference(path),
+    cell: (text) => text.replace(/\$/g, '').toUpperCase(),
+    scope: (name) => [image(name)],
+    quotedName: (text) => text.slice(1, -1).replace(/''/g, "'"),
+    path: ([head, tail]) => {
+      const path = new Array(tail.length + 1)
+      path[0] = image(head)
+      for (let index = 0; index < tail.length; index++) path[index + 1] = image(tail[index])
+      return path
+    },
+    bracketedName: (text) => text.slice(1, -1),
+    wildcard: () => WILDCARD
+  }
+
+  /**
+   * Under the `formula.` prefix the grammar uses. Every one takes a single
+   * argument, so they all declare `optimizeUnary`: the engine passes the value
+   * straight through instead of wrapping it, which is also what lets every
+   * action above compile to source.
+   */
+  export default Object.fromEntries(
+    Object.entries(helpers).map(([name, method]) => [`formula.${name}`, { method, optimizeUnary: true }])
+  )
+}

@@ -1,6 +1,6 @@
 import { readFile } from 'node:fs/promises'
 import { describe, it, expect } from 'vitest'
-import { createParser, createDefinitionParser } from '../src/index.js'
+import { createParser, parseDefinition } from '../src/index.js'
 import { grammar, createFormulaMethods } from '../examples/formula.js'
 
 /**
@@ -19,9 +19,9 @@ import { grammar, createFormulaMethods } from '../examples/formula.js'
  */
 
 const definition = await readFile(new URL('../examples/formula.jlg', import.meta.url), 'utf8')
-const metaCompiled = createDefinitionParser()
-const metaInterpreted = createDefinitionParser({ execution: 'interpreted' })
-const generated = metaCompiled.parse(definition)
+// `parseDefinition` rather than the definition parser directly: the file ends
+// with a `methods` block, which is separated out before the language sees it.
+const generated = parseDefinition(definition)
 
 const options = {
   functions: new Set(['SUM', 'IF', 'ABS']),
@@ -54,7 +54,7 @@ const cases = [
 describe('grammar-definition bootstrap', () => {
   it('meta-parses Sheetlang the same way in both execution modes', () => {
     expect(generated.name).toBe('Sheetlang')
-    expect(metaInterpreted.parse(definition)).toEqual(generated)
+    expect(parseDefinition(definition, { execution: 'interpreted' })).toEqual(generated)
   })
 
   it('produces something JSON can round-trip', () => {

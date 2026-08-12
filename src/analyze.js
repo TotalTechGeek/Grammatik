@@ -263,6 +263,82 @@ function isPlainParser (node) {
   return op !== null && op !== 'label' && op !== 'action'
 }
 
+/** Structural equality over plain JSON — every shape a grammar node can be. */
+function deepEqual (a, b) {
+  if (a === b) return true
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false
+    for (let i = 0; i < a.length; i++) if (!deepEqual(a[i], b[i])) return false
+    return true
+  }
+  if (a === null || b === null || typeof a !== 'object' || typeof b !== 'object') return false
+  const keysA = Object.keys(a)
+  const keysB = Object.keys(b)
+  if (keysA.length !== keysB.length) return false
+  for (const key of keysA) {
+    if (!Object.prototype.hasOwnProperty.call(b, key) || !deepEqual(a[key], b[key])) return false
+  }
+  return true
+}
+
+/**
+ * Left-factors an `alt` whose branches are all `seq` and share a literal
+ * leading run of nodes — `alt(seq(P, X, actionX), seq(P, Y, actionY))`
+ * becomes `seq(P, alt(seq(X, actionX), seq(Y, actionY)))`, so a shared,
+ * possibly multi-token prefix is matched once per attempt instead of once per
+ * colliding branch.
+ *
+ * Two things have to hold for the rewrite to be safe, not just structurally
+ * possible:
+ *
+ *  - The shared prefix cannot contain a `label` or an `action`. A `seq`'s
+ *    bindings are scoped to itself; hoisting a labelled node out from under
+ *    the branch that reads it would strand the binding in a different scope
+ *    than the action that expects to see it.
+ *  - Every branch must already end its own decision with an `action`
+ *    somewhere in its remainder (`seq` yields that action's value instead of
+ *    the flat array of its children). That is what lets the rewritten form
+ *    reproduce the original value exactly, by wrapping the factored `alt` in
+ *    one more `label`/`action` pair rather than redesigning what the branch
+ *    returns.
+ *
+ * A branch that is a strict prefix of another (nothing left after the shared
+ * run) fails the second check on its own — its remainder is empty, so it has
+ * no action left to find — and the whole rewrite backs off rather than guess
+ * what an author meant by writing one alternative as a prefix of another.
+ *
+ * @param {any[]} branches
+ * @returns {any|null}
+ */
+export function recognizeAltPrefixIdiom (branches) {
+  if (!Array.isArray(branches) || branches.length < 2) return null
+  if (!branches.every((b) => opOf(b) === 'seq' && Array.isArray(b.seq))) return null
+
+  const seqs = branches.map((b) => b.seq)
+  const minLen = Math.min(...seqs.map((s) => s.length))
+
+  let n = 0
+  while (n < minLen) {
+    const candidate = seqs[0][n]
+    const op = opOf(candidate)
+    if (op === 'label' || op === 'action') break
+    if (!seqs.every((s) => deepEqual(s[n], candidate))) break
+    n++
+  }
+  if (n === 0) return null
+  if (!seqs.every((s) => s.slice(n).some((child) => opOf(child) === 'action'))) return null
+
+  const prefix = seqs[0].slice(0, n)
+  const remainders = seqs.map((s) => ({ seq: s.slice(n) }))
+  return {
+    seq: [
+      ...prefix,
+      { label: ['__grammatik_rest', { alt: remainders }] },
+      { action: { val: '__grammatik_rest' } }
+    ]
+  }
+}
+
 const BAIL = Symbol('grammatik.bail')
 
 /**

@@ -2,7 +2,7 @@
 'use strict'
 
 import { FAIL, expect } from './state.js'
-import { buildDispatch, opOf, recognizeSeqIdiom } from './analyze.js'
+import { buildDispatch, opOf, recognizeSeqIdiom, recognizeAltPrefixIdiom } from './analyze.js'
 
 /**
  * The specializing planner.
@@ -849,6 +849,12 @@ export function createPlanner (config) {
 
   function planAlt (branches) {
     if (!Array.isArray(branches)) throw new Error("'alt' expects an array of branches")
+
+    // A shared, possibly multi-token prefix across every branch is matched
+    // once here rather than once per branch that has it — see the comment on
+    // recognizeAltPrefixIdiom for the safety conditions.
+    const factored = recognizeAltPrefixIdiom(branches)
+    if (factored !== null) return planUncached(factored)
 
     const planned = branches.map(plan)
     const table = firsts ? buildDispatch(branches, firsts) : null

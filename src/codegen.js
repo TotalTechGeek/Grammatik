@@ -2,7 +2,7 @@
 'use strict'
 
 import { FAIL, expect } from './state.js'
-import { buildDispatch, opOf, recognizeSeqIdiom } from './analyze.js'
+import { buildDispatch, opOf, recognizeSeqIdiom, recognizeAltPrefixIdiom } from './analyze.js'
 
 /**
  * A real source generator for grammars.
@@ -555,6 +555,9 @@ export function createCodegen (config) {
 
   function genAlt (branches, out, result, bindingsVar) {
     if (!Array.isArray(branches)) throw new Error("'alt' expects an array of branches")
+
+    const factored = recognizeAltPrefixIdiom(branches)
+    if (factored !== null) return gen(factored, out, bindingsVar)
 
     const table = firsts ? buildDispatch(branches, firsts) : null
     const label = 'L' + nextId()

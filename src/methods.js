@@ -25,7 +25,7 @@ import { declareSync } from './plan.js'
 export const OPERATORS = [
   'consume', 'epsilon', 'seq', 'alt', 'oneOf', 'eof',
   'many', 'many1', 'option', 'manySep', 'many1Sep',
-  'infixLeft', 'infixRight', 'prefix', 'postfix', 'between', 'as',
+  'infixLeft', 'infixRight', 'prefix', 'postfix', 'between', 'pick', 'yields', 'flag', 'as',
   'subrule', 'label', 'action', 'lookahead', 'negLookahead', 'text'
 ]
 

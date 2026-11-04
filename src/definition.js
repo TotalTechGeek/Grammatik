@@ -227,6 +227,7 @@ const CONSTRUCTORS = {
   many: { arity: [1, 1], of: ([a]) => ({ many: a }) },
   many1: { arity: [1, 1], of: ([a]) => ({ many1: a }) },
   option: { arity: [1, 1], of: ([a]) => ({ option: a }) },
+  flag: { arity: [1, 1], of: ([a]) => ({ flag: a }) },
   action: { arity: [1, 1], of: ([a]) => ({ action: a }) },
   lookahead: { arity: [1, 1], of: ([a]) => ({ lookahead: a }) },
   negLookahead: { arity: [1, 1], of: ([a]) => ({ negLookahead: a }) },
@@ -241,6 +242,10 @@ const CONSTRUCTORS = {
   many1Sep: { arity: [2, 2], of: ([a, b]) => ({ many1Sep: { rule: a, sep: b } }) },
 
   between: { arity: [3, 3], of: ([a, b, c]) => ({ between: { open: a, body: b, close: c } }) },
+  // pick(1, consume(Open), subrule(Body), consume(Close)) — the result at that index.
+  pick: { arity: [2, Infinity], of: ([index, ...parsers]) => ({ pick: { parsers, index } }) },
+  // yields(consume(True), true) — run the parsers, give back the constant.
+  yields: { arity: [2, Infinity], of: (args) => ({ yields: { parsers: args.slice(0, -1), value: args[args.length - 1] } }) },
   infixLeft: { arity: [3, 3], of: ([a, b, c]) => ({ infixLeft: { operand: a, operator: b, combine: logicOf(c) } }) },
   infixRight: { arity: [3, 3], of: ([a, b, c]) => ({ infixRight: { operand: a, operator: b, combine: logicOf(c) } }) },
   prefix: { arity: [3, 3], of: ([a, b, c]) => ({ prefix: { operator: a, operand: b, combine: logicOf(c) } }) },

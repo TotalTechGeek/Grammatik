@@ -1,9 +1,10 @@
 /**
  * `grammatik/runtime` — the surface a generated parser imports.
  *
- * Deliberately small: a generated file needs the lexer, the parse state and
- * error construction, and nothing else. The analyzer, planner and code
- * generator were already run when the file was written.
+ * Deliberately small: a generated file needs the parse state and error
+ * construction, and nothing else. The analyzer, planner, code generator and
+ * (by default) the lexer were already run when the file was written. `createLexer`
+ * is still here for files emitted with `lexer: 'runtime'`.
  */
 
 import type { Token, TokenDef, PositionMode, Lexer, Parser } from './index.js'

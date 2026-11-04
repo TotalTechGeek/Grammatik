@@ -2,7 +2,7 @@
 'use strict'
 
 import { FAIL, expect } from './state.js'
-import { buildDispatch, opOf, recognizeSeqIdiom, recognizeAltPrefixIdiom } from './analyze.js'
+import { buildDispatch, opOf, recognizeSeqIdiom, recognizeAltPrefixIdiom, recognizeAltConsumeIdiom, usesOuterScope } from './analyze.js'
 
 /**
  * The specializing planner.
@@ -32,27 +32,6 @@ function declareSync (fn) {
 }
 
 /**
- * True when the logic reads from an outer scope (`{val: [[-1], ...]}` or
- * `{var: "../x"}`). The engine's compiler does not thread `above` into built
- * functions, so such actions must stay interpreted.
- */
-function usesOuterScope (logic) {
-  if (Array.isArray(logic)) return logic.some(usesOuterScope)
-  if (!logic || typeof logic !== 'object') return false
-
-  for (const key of Object.keys(logic)) {
-    const arg = logic[key]
-    if (key === 'val' && Array.isArray(arg) && Array.isArray(arg[0])) return true
-    if (key === 'var') {
-      if (typeof arg === 'string' && arg.includes('../')) return true
-      if (Array.isArray(arg) && typeof arg[0] === 'string' && arg[0].includes('../')) return true
-    }
-    if (usesOuterScope(arg)) return true
-  }
-  return false
-}
-
-/**
  * True when the logic could return the *context object itself* rather than a
  * value derived from it — `{"var": ""}` and `{"val": []}` both do.
  *
@@ -77,10 +56,11 @@ function mayReturnContext (logic) {
 /**
  * @param {{ engine: any, rules: Record<string, any>, firsts: Map<string, any>|null,
  *           memo: boolean, maxSteps: number, unsafeEval?: boolean,
- *           tokenIds?: Map<string, number>|null }} config
+ *           tokenIds?: Map<string, number>|null,
+ *           memoSlots?: Map<string, number>, idioms?: boolean }} config
  */
 export function createPlanner (config) {
-  const { engine, rules, firsts, memo, maxSteps, unsafeEval = true, tokenIds = null } = config
+  const { engine, rules, firsts, memo, maxSteps, unsafeEval = true, tokenIds = null, memoSlots = new Map(), idioms = true } = config
 
   /** @type {Map<string, { fn: ((state: any) => any) | null }>} */
   const slots = new Map()
@@ -303,6 +283,25 @@ export function createPlanner (config) {
       }
   }
 
+  /**
+   * `{"flag": p}` — `true` when `p` matched, `false` when it did not; never fails.
+   * `option` with the answer already turned into a boolean, for the common
+   * `label(negated, option(consume(Not)))` followed by `{"!==": [negated, null]}`.
+   *
+   * @returns {(state: any) => any}
+   */
+  const buildFlag = (arg) => {
+      const child = plan(arg)
+      return (state) => {
+        const start = state.idx
+        if (child(state) === FAIL) {
+          state.idx = start
+          return false
+        }
+        return true
+      }
+  }
+
   /** @returns {(state: any) => any} */
   const buildInfixLeft = (arg) => {
       // A whole precedence level in one closure.
@@ -467,6 +466,35 @@ export function createPlanner (config) {
       }
   }
 
+  /**
+   * `{"pick": {parsers, index}}` and `{"yields": {parsers, value}}` run their parsers
+   * in order and give back one of the results or a constant. They are what a `seq`
+   * with a single labelled child and `action({val: label})`, or with a constant
+   * action, is rewritten to: neither needs the bindings object a `seq` allocates.
+   *
+   * @returns {(state: any) => any}
+   */
+  const buildSequence = (arg, pickIndex, constant) => {
+      const fns = arg.parsers.map(plan)
+      const count = fns.length
+      return (state) => {
+        tick(state)
+        const start = state.idx
+        let picked
+        for (let i = 0; i < count; i++) {
+          const value = fns[i](state)
+          if (value === FAIL) {
+            state.idx = start
+            return FAIL
+          }
+          if (i === pickIndex) picked = value
+        }
+        return pickIndex === -1 ? constant : picked
+      }
+  }
+  const buildPick = (arg) => buildSequence(arg, arg.index, undefined)
+  const buildYields = (arg) => buildSequence(arg, -1, arg.value)
+
   /** @returns {(state: any) => any} */
   const buildPrefix = (arg) => {
       // Any number of prefix operators, folded right onto the operand:
@@ -567,6 +595,34 @@ export function createPlanner (config) {
           return value
         }
       }
+      // A rule chosen by `selectMemoRules` remembers its result per position, so
+      // the branches of an `alt` that all start with it parse it once between
+      // them. Global `memo` already covers every rule, hence the order here.
+      const memoSlot = memoSlots.get(name)
+      if (memoSlot !== undefined) {
+        return (state) => {
+          tick(state)
+          const table = state.rm[memoSlot]
+          const at = state.idx
+          const end = table.ends[at]
+          if (end !== 0) {
+            state.idx = end - 1
+            return table.vals[at]
+          }
+          let depth = 0
+          if (state.track) {
+            depth = state.ruleDepth
+            state.ruleNames[depth] = name
+            state.ruleDepth = depth + 1
+          }
+          const value = slot.fn(state)
+          if (state.track) state.ruleDepth = depth
+          if (value === FAIL) state.idx = at
+          table.ends[at] = state.idx + 1
+          table.vals[at] = value
+          return value
+        }
+      }
       return (state) => {
         tick(state)
         // See above: rule-stack bookkeeping is failure-path only.
@@ -664,6 +720,9 @@ export function createPlanner (config) {
     infixRight: buildInfixRight,
     as: buildAs,
     between: buildBetween,
+    flag: buildFlag,
+    pick: buildPick,
+    yields: buildYields,
     prefix: buildPrefix,
     postfix: buildPostfix,
     manySep: (arg) => planSeparated(arg, false),
@@ -690,7 +749,7 @@ export function createPlanner (config) {
     // A `seq` written in one of the recognized idioms is planned as the cheaper
     // combinator instead, so grammars written with the general primitives get
     // the same treatment as ones written with the specific ones.
-    const idiom = recognizeSeqIdiom(children)
+    const idiom = idioms ? recognizeSeqIdiom(children) : null
     if (idiom !== null) return planUncached(idiom)
 
     // Step kinds. Terminals are inlined rather than dispatched to a closure:
@@ -853,7 +912,10 @@ export function createPlanner (config) {
     // A shared, possibly multi-token prefix across every branch is matched
     // once here rather than once per branch that has it — see the comment on
     // recognizeAltPrefixIdiom for the safety conditions.
-    const factored = recognizeAltPrefixIdiom(branches)
+    const oneOf = idioms ? recognizeAltConsumeIdiom(branches) : null
+    if (oneOf !== null) return planUncached(oneOf)
+
+    const factored = idioms ? recognizeAltPrefixIdiom(branches) : null
     if (factored !== null) return planUncached(factored)
 
     const planned = branches.map(plan)

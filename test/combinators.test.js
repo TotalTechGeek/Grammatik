@@ -386,8 +386,12 @@ describe('parser options', () => {
     const memoized = createParser(spec, { memo: true, maxSteps: 100000 })
     expect(memoized.parse('7').image).toBe('7')
 
-    const plain = createParser(spec, { maxSteps: 100000 })
+    // `autoMemo` would rescue this grammar on its own (both branches start with
+    // the same rule), so it is switched off to show what memoization is for.
+    const plain = createParser(spec, { autoMemo: false, maxSteps: 100000 })
     expect(() => plain.parse('7')).toThrow(/maxSteps/)
+
+    expect(createParser(spec, { maxSteps: 100000 }).parse('7').image).toBe('7')
   })
 
   it('memoization does not change which inputs are rejected', () => {

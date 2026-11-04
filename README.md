@@ -121,9 +121,12 @@ Invalid grammar:
 | `many` | `{"many": p}` | Zero or more. |
 | `many1` | `{"many1": p}` | One or more. |
 | `option` | `{"option": p}` | Zero or one; yields `null` when absent. |
+| `flag` | `{"flag": p}` | Zero or one; yields `true` when `p` matched and `false` when it did not. Replaces `label(negated, option(consume(Not)))` plus `{"!==": [{"val": "negated"}, null]}` in the action. Written by hand: the same generated code as `option`, so it is for readability, not speed, and nothing rewrites to it (that would mean rewriting the action as well). |
 | `manySep` | `{"manySep": {"rule": p, "sep": "Comma", "trailing": false}}` | Separated list. |
 | `many1Sep` | as above | Separated list, at least one. |
 | `between` | `{"between": {"open": p, "body": p, "close": p}}` | Bracketed; yields the body. |
+| `pick` | `{"pick": {"parsers": [p, ...], "index": 1}}` | The parsers in order; yields the one at `index`. `between` with any number on either side, e.g. `pick(1, consume(Where), subrule(Expr))`. |
+| `yields` | `{"yields": {"parsers": [p, ...], "value": "ASC"}}` | The parsers in order; yields a constant (string, number, boolean or null). `yields(consume(Asc), "ASC")`. |
 | `infixLeft` | `{"infixLeft": {"operand": p, "operator": p, "combine": logic}}` | One left-associative precedence level; `combine` sees `left`/`op`/`right`. |
 | `infixRight` | as above | Right-associative: `a ^ b ^ c` is `a ^ (b ^ c)`. |
 | `prefix` | `{"prefix": {"operator": p, "operand": p, "combine": logic}}` | Prefix operators, folded right; `combine` sees `op`/`operand`. |
@@ -291,6 +294,9 @@ A parser exposes `parse(text)`, `parseTokens(tokens, source?)`, `tokenize(text)`
 | `execution` | `'generated'` | `'generated'` (a JS function per rule) or `'interpreted'` (closures, no code generation). |
 | `positions` | `'full'` | `'full'` records line and column per token; `'offset'` records byte offsets only and skips scanning for newlines. |
 | `memo` | `false` | Packrat memoization on `(rule, position)`. Changes the complexity class on grammars that backtrack; pure overhead on grammars that do not. |
+| `autoMemo` | `true` | Memoize only the rules that several colliding branches of an `alt` would each re-parse (listed in `parser.memoRules`). Where `memo` costs ~2x everywhere, this costs nothing on a grammar with no such rule, and removes the exponential cost of nesting when there is one: in the SQL example `WHERE ((((((( x IS NULL )))))))` went from 255 ms to ~15 µs. Ignored when `memo` is on. |
+| `inlineRules` | `true` (`false` for `emitModule`) | In generated code, write single-caller operator levels (`infixLeft`, `infixRight`, `prefix`, `postfix`) into their caller instead of calling them, up to six per function (past that V8 stops optimizing the function). 2–3x on a bare precedence chain but only ~1.02–1.04x on the formula and SQL examples, and it makes the code bigger (the formula module grows 32% minified), so a parser built at run time has it on and an emitted file, which someone ships, leaves it off. No effect on `execution: 'interpreted'`. |
+| `idioms` | `true` | Recognize common spellings and run them as the cheaper combinator they are equivalent to: `seq(open, label(n, p), close, action({val:n}))` → `between`; `seq(prefix…, label(n, p), action({val:n}))` → `pick`; `seq(p…, action(<constant>))` → `yields`; `label` + `action` → `as`; `alt(consume(A), consume(B), …)` → `oneOf` (1.3–1.8x on its own for the 2–7 token operator sets grammars have); a shared leading run of `alt` branches is factored out. Neither `pick` nor `yields` allocates the bindings object a `seq` does. Off runs the grammar exactly as written. |
 | `strict` | `true` | Require the whole token stream to be consumed. |
 | `ll1` | `true` | Use FIRST-set dispatch for `alt`. Off forces ordered backtracking. |
 | `validate` | `true` | Throw `GrammarError` on left recursion and bad references. |
@@ -326,6 +332,15 @@ parse('5*3+2*5-1')
 The file holds the same rule functions `createParser` would build at run time, as
 source. The grammar was analyzed when the file was written, so importing it does
 no grammar work and calls no `new Function`.
+
+The lexer is written out as source too. A table-driven lexer would need an engine
+at run time — regex analysis, scanner selection, dispatch tables — in every
+process that loads the file; the generated one carries only the code its grammar
+needs. For the JSON parity grammar that is a 9.6 KB bundle against 24.0 KB (3.1
+against 8.4 KB gzipped) with the engine, loads about 2.5x faster, and lexes
+1.4x faster (`positions: 'offset'`). It produces exactly the tokens and errors
+`createLexer` does; `test/lexgen.test.js` holds it to that on every example
+grammar. `--lexer runtime` keeps the old behaviour.
 
 Pass `--methods ./methods.js` and the emitter compiles the semantic actions to
 source as well. When every action compiles, the `json-logic-engine` import is
@@ -423,6 +438,7 @@ would show up in its size immediately.
 
 ```
 src/lexer.js      Token definitions to a sticky-regex lexer with first-char dispatch
+src/lexgen.js     The same lexer written out as source, for emitted parsers
 src/firstchars.js Static analysis of regex sources, for that dispatch
 src/analyze.js    FIRST sets, nullability, left recursion, idiom recognition
 src/plan.js       Specializes a grammar into closures

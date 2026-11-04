@@ -2,7 +2,7 @@
 'use strict'
 
 import { FAIL, expect } from './state.js'
-import { buildDispatch, opOf, recognizeSeqIdiom, recognizeAltPrefixIdiom } from './analyze.js'
+import { buildDispatch, opOf, recognizeSeqIdiom, recognizeAltPrefixIdiom, recognizeAltConsumeIdiom } from './analyze.js'
 
 /**
  * A real source generator for grammars.
@@ -23,10 +23,11 @@ import { buildDispatch, opOf, recognizeSeqIdiom, recognizeAltPrefixIdiom } from 
 
 /**
  * @param {{ planner: any, rules: Record<string, any>, firsts: Map<string, any>|null,
- *           memo: boolean, maxSteps: number, tokenIds?: Map<string, number>|null }} config
+ *           memo: boolean, maxSteps: number, tokenIds?: Map<string, number>|null,
+ *           memoSlots?: Map<string, number>, inlineRules?: boolean, idioms?: boolean }} config
  */
 export function createCodegen (config) {
-  const { planner, rules, firsts, memo, maxSteps, tokenIds = null } = config
+  const { planner, rules, firsts, memo, maxSteps, tokenIds = null, memoSlots = new Map(), inlineRules = true, idioms = true } = config
 
   /**
    * `token.id === <n>` is an integer compare instead of a string compare, and
@@ -73,6 +74,56 @@ export function createCodegen (config) {
 
   /** A literal value sitting in parser position. */
   const constantHelper = (node) => helper(planner.plan(node), { kind: 'constant', node })
+
+  /**
+   * Operator-precedence levels (`Additive = infixLeft(subrule(Multiplicative), ...)`)
+   * are written as a chain of rules, one per level, and each level costs a call, a
+   * loop and a token check even when no operator of that level follows: measured at
+   * ~10 ns per level per atom, so an 8-level chain costs several times the atom
+   * itself. A level with exactly one caller can be written into that caller's body
+   * instead, which keeps the loop and drops the call.
+   *
+   * Only these four shapes, and only a single call site: nothing is duplicated, and
+   * the function that results stays small enough for V8 to optimize (a rule like
+   * `Primary`, with an `alt` of many branches, is not a level and is left a call).
+   */
+  // How many levels go into one function. Unbounded, a long chain makes a function
+  // larger than V8 will optimize at all (its `max-optimized-bytecode-size`), and the
+  // gain turns back into a loss: measured on a synthetic chain, 8 levels in one
+  // function ran at 66 ns per atom against 33 ns for 7. Six per function was the best
+  // of the caps tried (2, 3, 4, 5, 6, 8) across chains of 3 to 16 levels.
+  const MAX_INLINE_DEPTH = 6
+  /** `oneOf` with more names than this is generated as a `switch` on the token id. */
+  const ONE_OF_SWITCH_AT = 12
+  const INLINE_OPS = new Set(['infixLeft', 'infixRight', 'prefix', 'postfix'])
+  const callSites = new Map()
+  ;(function count (node) {
+    if (Array.isArray(node)) { for (const child of node) count(child); return }
+    if (!node || typeof node !== 'object') return
+    if ('subrule' in node) {
+      const target = Array.isArray(node.subrule) ? node.subrule[0] : node.subrule
+      if (typeof target === 'string') callSites.set(target, (callSites.get(target) || 0) + 1)
+    }
+    for (const key of Object.keys(node)) count(node[key])
+  })(rules)
+  /** Rules being written into a caller right now, so a cycle cannot recurse forever. */
+  const inlining = new Set()
+  /**
+   * Some constructs write a child twice: `infixLeft` and `infixRight` their operand (once for the
+   * first, once inside the loop), `many1` and `many1Sep` their item. Inline a rule into *both*
+   * copies and a chain of such rules multiplies out — one copy per level at the first, two at the
+   * next, four at the next: measured, the formula grammar's module nearly doubled and a six-level
+   * chain grew fivefold. The second copy is the loop body, which only runs when more input follows,
+   * so it stays a call; only the first copy, the one every parse goes through, is inlined.
+   */
+  let coldDepth = 0
+  const cold = (write) => {
+    coldDepth++
+    try { return write() } finally { coldDepth-- }
+  }
+  const canInline = (name) =>
+    inlineRules && coldDepth === 0 && !memo && !memoSlots.has(name) && !inlining.has(name) && inlining.size < MAX_INLINE_DEPTH &&
+    callSites.get(name) === 1 && INLINE_OPS.has(opOf(rules[name]))
 
   function indexOfRule (name) {
     let index = ruleIndex.get(name)
@@ -153,6 +204,17 @@ export function createCodegen (config) {
         return result
       }
 
+      case 'flag': {
+        const start = nextId()
+        out.push(`let ${result};`, `const ${start} = c.idx;`, '{')
+        const value = gen(arg, out, bindingsVar)
+        out.push(
+          `if (${value} === F) { c.idx = ${start}; ${result} = false; } else ${result} = true;`,
+          '}'
+        )
+        return result
+      }
+
       case 'many':
       case 'many1': {
         const atLeastOne = op === 'many1'
@@ -172,7 +234,7 @@ export function createCodegen (config) {
         }
 
         out.push('for (;;) {', `const ${before} = c.idx;`)
-        const value = gen(arg, out, bindingsVar)
+        const value = atLeastOne ? cold(() => gen(arg, out, bindingsVar)) : gen(arg, out, bindingsVar)
         out.push(
           `if (${value} === F) { c.idx = ${before}; break; }`,
           `if (c.idx === ${before}) P(${JSON.stringify(op)}, ${before});`,
@@ -209,7 +271,7 @@ export function createCodegen (config) {
           out.push(`if (${operatorVar} === F) { c.idx = ${mark}; break; }`)
         }
 
-        const right = gen(arg.operand, out, bindingsVar)
+        const right = cold(() => gen(arg.operand, out, bindingsVar))
         out.push(
           `if (${right} === F) { c.idx = ${mark}; break; }`,
           `if (${bindings} === null) ${bindings} = { left: null, op: null, right: null };`,
@@ -225,12 +287,34 @@ export function createCodegen (config) {
       case 'oneOf': {
         const names = Array.isArray(arg) ? arg : [arg]
         const token = nextId()
+        const ids = tokenIds ? names.map((n) => tokenIds.get(n)) : []
+        const failed = `else { ${names.map((n) => `E(c, ${JSON.stringify(n)});`).join(' ')} ${result} = F; }`
+
+        if (names.length > ONE_OF_SWITCH_AT && ids.every((id) => id !== undefined)) {
+          // Past a handful of names a chain of comparisons costs more than a jump
+          // table: measured, the chain matched `alt`'s switch at 12 names and lost
+          // beyond. Integer cases only, as `alt` does it — a `case undefined` for a
+          // hand-built token would stop V8 building the table — so the id is
+          // normalised first, from the type name when the token has none.
+          const hit = nextId()
+          const cases = [...new Set(ids)].map((id) => `case ${id}:`).join(' ')
+          out.push(
+            `let ${result};`,
+            `const ${token} = c.tokens[c.idx];`,
+            `let ${hit} = false;`,
+            `if (${token} !== undefined) { switch (${token}.id !== undefined ? ${token}.id : I[${token}.type]) { ${cases} ${hit} = true; } }`,
+            `if (${hit}) { c.idx++; ${result} = ${token}; }`,
+            failed
+          )
+          return result
+        }
+
         const test = names.map((n) => typeCheck(token, n)).join(' || ')
         out.push(
           `let ${result};`,
           `const ${token} = c.tokens[c.idx];`,
           `if (${token} !== undefined && (${test})) { c.idx++; ${result} = ${token}; }`,
-          `else { ${names.map((n) => `E(c, ${JSON.stringify(n)});`).join(' ')} ${result} = F; }`
+          failed
         )
         return result
       }
@@ -266,7 +350,7 @@ export function createCodegen (config) {
           operatorVar = gen(arg.operator, out, bindingsVar)
           out.push(`if (${operatorVar} === F) { c.idx = ${mark}; break; }`)
         }
-        const right = gen(arg.operand, out, bindingsVar)
+        const right = cold(() => gen(arg.operand, out, bindingsVar))
         out.push(
           `if (${right} === F) { c.idx = ${mark}; break; }`,
           `if (${items} === null) ${items} = [];`,
@@ -344,6 +428,22 @@ export function createCodegen (config) {
           `${result} = ${body};`,
           '}'
         )
+        return result
+      }
+
+      case 'pick':
+      case 'yields': {
+        // The parsers in order, then one of their results or a constant; no
+        // bindings object, which is the point (see `recognizeSeqIdiom`).
+        const label = 'L' + nextId()
+        const start = nextId()
+        out.push(tickSrc, `let ${result};`, `${label}: {`, `const ${start} = c.idx;`)
+        const values = arg.parsers.map((parser) => {
+          const value = gen(parser, out, bindingsVar)
+          out.push(`if (${value} === F) { c.idx = ${start}; ${result} = F; break ${label}; }`)
+          return value
+        })
+        out.push(`${result} = ${op === 'pick' ? values[arg.index] : JSON.stringify(arg.value)};`, '}')
         return result
       }
 
@@ -428,7 +528,7 @@ export function createCodegen (config) {
         )
         const sep = gen(sepNode, out, bindingsVar)
         out.push(`if (${sep} === F) { c.idx = ${beforeSep}; break; }`, `const ${beforeItem} = c.idx;`)
-        const item = gen(arg.rule, out, bindingsVar)
+        const item = cold(() => gen(arg.rule, out, bindingsVar))
         out.push(
           `if (${item} === F) { c.idx = ${trailing ? beforeItem : beforeSep}; break; }`,
           `${result}.push(${item});`,
@@ -445,8 +545,20 @@ export function createCodegen (config) {
           out.push(`const ${result} = ${helper(planner.plan(node), { kind: 'unknownRule', name })}(c);`)
           return result
         }
-        const index = indexOfRule(name)
         const parent = nextId()
+        if (canInline(name)) {
+          out.push(tickSrc)
+          out.push(
+            `const ${parent} = c.ruleDepth;`,
+            `if (c.track) { c.ruleNames[${parent}] = ${JSON.stringify(name)}; c.ruleDepth = ${parent} + 1; }`
+          )
+          inlining.add(name)
+          const inner = gen(rules[name], out, null)
+          inlining.delete(name)
+          out.push(`if (c.track) c.ruleDepth = ${parent};`)
+          return inner
+        }
+        const index = indexOfRule(name)
         out.push(tickSrc)
         if (memo) {
           const key = nextId()
@@ -465,6 +577,27 @@ export function createCodegen (config) {
             `if (c.track) c.ruleDepth = ${parent};`,
             `if (${result} === F) c.idx = ${start};`,
             `c.memo.set(${key}, { value: ${result}, end: c.idx });`,
+            '}'
+          )
+        } else if (memoSlots.has(name)) {
+          // Chosen by `selectMemoRules`: remember the result per position.
+          const table = nextId()
+          const at = nextId()
+          const end = nextId()
+          out.push(
+            `let ${result};`,
+            `const ${table} = c.rm[${memoSlots.get(name)}];`,
+            `const ${at} = c.idx;`,
+            `const ${end} = ${table}.ends[${at}];`,
+            `if (${end} !== 0) { c.idx = ${end} - 1; ${result} = ${table}.vals[${at}]; }`,
+            'else {',
+            `const ${parent} = c.ruleDepth;`,
+            `if (c.track) { c.ruleNames[${parent}] = ${JSON.stringify(name)}; c.ruleDepth = ${parent} + 1; }`,
+            `${result} = R[${index}](c);`,
+            `if (c.track) c.ruleDepth = ${parent};`,
+            `if (${result} === F) c.idx = ${at};`,
+            `${table}.ends[${at}] = c.idx + 1;`,
+            `${table}.vals[${at}] = ${result};`,
             '}'
           )
         } else {
@@ -489,7 +622,7 @@ export function createCodegen (config) {
     if (!Array.isArray(children)) throw new Error("'seq' expects an array of parsers")
 
     // Same idiom recognition as the planner, so both paths agree.
-    const idiom = recognizeSeqIdiom(children)
+    const idiom = idioms ? recognizeSeqIdiom(children) : null
     if (idiom !== null) return gen(idiom, out, null)
 
     let hasLabels = false
@@ -556,7 +689,10 @@ export function createCodegen (config) {
   function genAlt (branches, out, result, bindingsVar) {
     if (!Array.isArray(branches)) throw new Error("'alt' expects an array of branches")
 
-    const factored = recognizeAltPrefixIdiom(branches)
+    const oneOf = idioms ? recognizeAltConsumeIdiom(branches) : null
+    if (oneOf !== null) return gen(oneOf, out, bindingsVar)
+
+    const factored = idioms ? recognizeAltPrefixIdiom(branches) : null
     if (factored !== null) return gen(factored, out, bindingsVar)
 
     const table = firsts ? buildDispatch(branches, firsts) : null

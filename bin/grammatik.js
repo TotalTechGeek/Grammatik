@@ -44,7 +44,11 @@ const USAGE = `Usage: grammatik generate <grammar.gram|grammar.json> [options]
       --format <format>   esm (default) | cjs
       --execution <mode>  generated (default) | interpreted
       --positions <mode>  full (default) | offset
+      --lexer <mode>      generated (default) | runtime
+                          generated writes the lexer into the file as source;
+                          runtime keeps it as a table the runtime interprets
       --memo              Enable packrat memoization
+      --no-auto-memo      Do not memoize shared-prefix rules automatically
       --no-ll1            Force ordered backtracking
       --max-steps <n>     Runaway guard (0 disables)
       --name <name>       Name recorded in the file header
@@ -69,11 +73,13 @@ for (let i = 1; i < args.length; i++) {
   else if (arg === '--format') flags.format = args[++i]
   else if (arg === '--execution') flags.execution = args[++i]
   else if (arg === '--positions') flags.positions = args[++i]
+  else if (arg === '--lexer') flags.lexer = args[++i]
   else if (arg === '--max-steps') flags.maxSteps = Number(args[++i])
   else if (arg === '--name') flags.name = args[++i]
   else if (arg === '--methods') flags.methods = args[++i]
   else if (arg === '--memo') flags.memo = true
   else if (arg === '--no-ll1') flags.ll1 = false
+  else if (arg === '--no-auto-memo') flags.autoMemo = false
   else if (arg.startsWith('-')) { console.error(`unknown option ${arg}\n\n${USAGE}`); process.exit(1) }
   else input = arg
 }
@@ -98,7 +104,9 @@ const output = emitModule(grammar, {
   format: flags.format,
   execution: flags.execution,
   positions: flags.positions,
+  lexer: flags.lexer,
   memo: flags.memo,
+  autoMemo: flags.autoMemo,
   ll1: flags.ll1,
   maxSteps: flags.maxSteps
 })

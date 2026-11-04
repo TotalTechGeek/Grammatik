@@ -2,9 +2,11 @@
 'use strict'
 
 import { createLexer } from './lexer.js'
+import { generateLexer } from './lexgen.js'
 import { analyze } from './analyze.js'
 import { createPlanner } from './plan.js'
 import { createCodegen } from './codegen.js'
+import { selectMemoRules } from './memoplan.js'
 import { usesOuterScope } from './plan.js'
 import { emitMethodsBlock, evaluateMethodsBlock } from './methodsblock.js'
 import { createValueMethods } from './values.js'
@@ -100,8 +102,9 @@ const literal = (value, indent = 0) => JSON.stringify(value, null, 2)
 
 /**
  * @param {import('./parser.js').GrammarSpec} spec
- * @param {{ memo?: boolean, strict?: boolean, ll1?: boolean, maxSteps?: number,
+ * @param {{ memo?: boolean, autoMemo?: boolean, inlineRules?: boolean, idioms?: boolean, strict?: boolean, ll1?: boolean, maxSteps?: number,
  *           positions?: 'full'|'offset', execution?: 'generated'|'interpreted',
+ *           lexer?: 'generated'|'runtime', scanners?: boolean, fuse?: boolean,
  *           format?: 'esm'|'cjs', validate?: boolean, moduleName?: string,
  *           runtimeSpecifier?: string, engineSpecifier?: string,
  *           methods?: Record<string, any> }} [options]
@@ -111,11 +114,21 @@ export function emitModule (spec, options = {}) {
   const { tokens: tokenDefs, rules, start } = spec
   const {
     memo = false,
+    autoMemo = true,
+    // Off here, on in `createParser`. Inlining a precedence chain is worth 2-3x on a bare chain but only
+    // 1.02-1.04x on the formula and SQL examples, and it makes the file bigger: the formula module grows
+    // 32% minified (38 to 50 KB) even after the second copy of each operand is kept as a call. A parser
+    // built at run time pays nothing for that; a file someone ships does.
+    inlineRules = false,
+    idioms = true,
     strict = true,
     ll1 = true,
     maxSteps = 0,
     positions = 'full',
     execution = 'generated',
+    lexer: lexerMode = 'generated',
+    scanners = true,
+    fuse = true,
     format = 'esm',
     validate = true,
     moduleName = spec.name || 'parser',
@@ -125,6 +138,7 @@ export function emitModule (spec, options = {}) {
   } = options
 
   if (format !== 'esm' && format !== 'cjs') throw new Error(`emitModule: format must be 'esm' or 'cjs', got ${quote(format)}`)
+  if (lexerMode !== 'generated' && lexerMode !== 'runtime') throw new Error(`emitModule: lexer must be 'generated' or 'runtime', got ${quote(lexerMode)}`)
 
   // A `methods { ... }` block travels with the grammar and is written into the
   // output as source. Nothing evaluates it here, so this path stays eval-free.
@@ -132,6 +146,8 @@ export function emitModule (spec, options = {}) {
   const block = methodsBlock ? emitMethodsBlock(methodsBlock, format) : null
   if (!start || !(start in rules)) throw new Error(`emitModule: start rule '${start}' is not defined in rules`)
 
+  // Built here even when the file will carry its own lexer: constructing it is what validates the token
+  // definitions, and it fixes the token ids the rules are compiled against.
   const lexer = createLexer(tokenDefs, { positions })
   const analysis = analyze(rules, { tokenNames: lexer.tokenNames })
   if (validate && analysis.errors.length > 0) throw new GrammarError(analysis.errors)
@@ -144,8 +160,12 @@ export function emitModule (spec, options = {}) {
   // comment in parser.js.
   const tokenIds = new Map(lexer.tokenNames.map((name, id) => [name, id]))
   const engine = { build: () => { throw new Error('not compiled during emit') }, run: () => {} }
-  const planner = createPlanner({ engine, rules, firsts, memo, maxSteps, unsafeEval: false, tokenIds })
-  const codegen = createCodegen({ planner, rules, firsts, memo, maxSteps, tokenIds })
+  const memoRules = autoMemo && !memo && analysis.errors.length === 0
+    ? selectMemoRules(rules, analysis.firsts, { ll1 })
+    : []
+  const memoSlots = new Map(memoRules.map((name, slot) => [name, slot]))
+  const planner = createPlanner({ engine, rules, firsts, memo, maxSteps, unsafeEval: false, tokenIds, memoSlots, idioms })
+  const codegen = createCodegen({ planner, rules, firsts, memo, maxSteps, tokenIds, memoSlots, inlineRules, idioms })
 
   codegen.compile(start)
 
@@ -214,7 +234,9 @@ export function emitModule (spec, options = {}) {
   // actions may use the value methods, so it has to register them the way
   // `createParser` does. They come from the runtime rather than being written
   // out here, so there is one implementation rather than two.
-  const runtimeImports = ['FAIL as F', 'expect as E', 'createState', 'buildParseError', 'createLexer']
+  // A lexer written out as source needs only the error class from the runtime; the engine stays out of the file.
+  const generatedLexer = lexerMode === 'generated'
+  const runtimeImports = ['FAIL as F', 'expect as E', 'createState', 'buildParseError', generatedLexer ? 'LexError' : 'createLexer']
   if (needsEngine) runtimeImports.push('createValueMethods')
 
   const importRuntime = cjs
@@ -244,7 +266,7 @@ export function emitModule (spec, options = {}) {
 //
 // The grammar was analyzed when this file was written: FIRST sets, left-recursion
 // checks and rule specialization all happened then. Importing it does no grammar
-// work and generates no code.
+// work and generates no code.${generatedLexer ? '\n// The lexer was written out as source too, so there is no lexer engine to load.' : ''}
 ${engineFree
   ? '// Every semantic action was compiled to source too, so this file has no\n// dependency on json-logic-engine at all.'
   : interpretedActions
@@ -258,7 +280,7 @@ const tokens = ${literal(tokenDefs)}
 
 const start = ${quote(start)}
 
-const lexer = createLexer(tokens, { positions: ${quote(positions)} })
+const lexer = ${generatedLexer ? generateLexer(tokenDefs, { positions, scanners, fuse }) : `createLexer(tokens, { positions: ${quote(positions)}, scanners: ${scanners}, fuse: ${fuse} })`}
 const tokenize = lexer.tokenize
 
 ${engineFree
@@ -357,7 +379,7 @@ const RULES = ${literal(Object.fromEntries(reached.map(([name, index]) => [name,
  * @param {string} [source]
  */
 function parseTokens (tokenList, source, track = false) {
-  const state = createState(tokenList, {}, { memo: ${memo}, maxSteps: ${maxSteps}, track })
+  const state = createState(tokenList, {}, { memo: ${memo}, maxSteps: ${maxSteps}, track, memoSlots: ${memoRules.length} })
   state.source = source
   state.positions = ${quote(positions)}
   state.ruleNames[0] = start

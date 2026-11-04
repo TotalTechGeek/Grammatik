@@ -1,0 +1,411 @@
+// A SQL grammar, for giggles. No particular dialect: SELECT (DISTINCT, joins,
+// WHERE, GROUP BY, HAVING, ORDER BY, LIMIT/OFFSET), INSERT, UPDATE, DELETE,
+// and an expression grammar with real operator precedence (OR, AND, NOT,
+// comparisons/IN/BETWEEN/LIKE/IS NULL, +-, */, unary -, CASE).
+//
+// One file, nothing else needed:
+//
+//   import { createParserFromSource } from 'grammatik'
+//   const parser = createParserFromSource(readFileSync('sql.gram', 'utf8'))
+//   parser.parse("SELECT id FROM users WHERE active = TRUE")
+//
+// Almost every action is base JSON Logic — numeric coercion reuses the
+// `{"+": [text, 0]}` trick from arithmetic.gram. String unescaping is the one
+// thing that needs actual code, so it lives in the `methods` block at the
+// bottom, the way formula.gram carries its own semantics. `methods` needs
+// `new Function` to evaluate, so this file is a build-time asset like
+// formula.gram — `grammatik generate` (or `emitModule`) turns it into an
+// eval-free parser module, the same as any other grammar with a block.
+
+grammar SQL;
+start Statement;
+
+token WS pattern "\\s+" skip;
+token LineComment pattern "--[^\\n]*" skip;
+token BlockComment pattern "/\\*[\\s\\S]*?\\*/" skip;
+
+// Keywords are `pattern` + `ignoreCase` rather than `literal`, because a
+// literal token's match is always case-sensitive regardless of `ignoreCase` —
+// only a pattern honours it. Each pattern ends in `(?![A-Za-z0-9_])`, a
+// negative lookahead requiring a word boundary, so `selection` lexes as one
+// identifier rather than SELECT followed by `ion` (the classic `if`/`iffy`
+// problem) — and, just as importantly, so a keyword that is itself a prefix
+// of another (OR/ORDER, IN/INTO/INNER/INSERT) never wins on the shorter
+// match: `OR` simply fails to match inside `ORDER` at all, rather than
+// matching and then needing `longerAlt` to notice a longer alternative
+// existed. `longerAlt` solves the same problem for a *pair* of tokens one at
+// a time; the boundary anchor solves it for every keyword against every
+// identifier and every other keyword at once, which is what a grammar with
+// this many keywords actually needs.
+token Select pattern "SELECT(?![A-Za-z0-9_])" ignoreCase;
+token From pattern "FROM(?![A-Za-z0-9_])" ignoreCase;
+token Where pattern "WHERE(?![A-Za-z0-9_])" ignoreCase;
+token As pattern "AS(?![A-Za-z0-9_])" ignoreCase;
+token Distinct pattern "DISTINCT(?![A-Za-z0-9_])" ignoreCase;
+token And pattern "AND(?![A-Za-z0-9_])" ignoreCase;
+token Or pattern "OR(?![A-Za-z0-9_])" ignoreCase;
+token Not pattern "NOT(?![A-Za-z0-9_])" ignoreCase;
+token In pattern "IN(?![A-Za-z0-9_])" ignoreCase;
+token Is pattern "IS(?![A-Za-z0-9_])" ignoreCase;
+token Null pattern "NULL(?![A-Za-z0-9_])" ignoreCase;
+token Like pattern "LIKE(?![A-Za-z0-9_])" ignoreCase;
+token Between pattern "BETWEEN(?![A-Za-z0-9_])" ignoreCase;
+token Inner pattern "INNER(?![A-Za-z0-9_])" ignoreCase;
+token Left pattern "LEFT(?![A-Za-z0-9_])" ignoreCase;
+token Right pattern "RIGHT(?![A-Za-z0-9_])" ignoreCase;
+token Full pattern "FULL(?![A-Za-z0-9_])" ignoreCase;
+token Outer pattern "OUTER(?![A-Za-z0-9_])" ignoreCase;
+token Join pattern "JOIN(?![A-Za-z0-9_])" ignoreCase;
+token On pattern "ON(?![A-Za-z0-9_])" ignoreCase;
+token Group pattern "GROUP(?![A-Za-z0-9_])" ignoreCase;
+token By pattern "BY(?![A-Za-z0-9_])" ignoreCase;
+token Order pattern "ORDER(?![A-Za-z0-9_])" ignoreCase;
+token Asc pattern "ASC(?![A-Za-z0-9_])" ignoreCase;
+token Desc pattern "DESC(?![A-Za-z0-9_])" ignoreCase;
+token Having pattern "HAVING(?![A-Za-z0-9_])" ignoreCase;
+token Limit pattern "LIMIT(?![A-Za-z0-9_])" ignoreCase;
+token Offset pattern "OFFSET(?![A-Za-z0-9_])" ignoreCase;
+token Insert pattern "INSERT(?![A-Za-z0-9_])" ignoreCase;
+token Into pattern "INTO(?![A-Za-z0-9_])" ignoreCase;
+token Values pattern "VALUES(?![A-Za-z0-9_])" ignoreCase;
+token Update pattern "UPDATE(?![A-Za-z0-9_])" ignoreCase;
+token Set pattern "SET(?![A-Za-z0-9_])" ignoreCase;
+token Delete pattern "DELETE(?![A-Za-z0-9_])" ignoreCase;
+token True pattern "TRUE(?![A-Za-z0-9_])" ignoreCase;
+token False pattern "FALSE(?![A-Za-z0-9_])" ignoreCase;
+token Case pattern "CASE(?![A-Za-z0-9_])" ignoreCase;
+token When pattern "WHEN(?![A-Za-z0-9_])" ignoreCase;
+token Then pattern "THEN(?![A-Za-z0-9_])" ignoreCase;
+token Else pattern "ELSE(?![A-Za-z0-9_])" ignoreCase;
+token End pattern "END(?![A-Za-z0-9_])" ignoreCase;
+
+token Number pattern "\\d+(?:\\.\\d+)?";
+token String pattern "'(?:''|[^'])*'";
+token Identifier pattern "[A-Za-z_][A-Za-z0-9_]*";
+
+token NotEq literal "<>";
+token LtEq literal "<=";
+token GtEq literal ">=";
+token BangEq literal "!=";
+token Lt literal "<";
+token Gt literal ">";
+token Eq literal "=";
+token Plus literal "+";
+token Minus literal "-";
+token Star literal "*";
+token Slash literal "/";
+token LParen literal "(";
+token RParen literal ")";
+token Comma literal ",";
+token Dot literal ".";
+token Semicolon literal ";";
+
+// -- statements ---------------------------------------------------------
+
+rule Statement = seq(
+  label(stmt, alt(subrule(SelectStatement), subrule(InsertStatement), subrule(UpdateStatement), subrule(DeleteStatement))),
+  option(consume(Semicolon)),
+  action({"val":"stmt"})
+);
+
+rule SelectStatement = seq(
+  consume(Select),
+  label(distinct, option(consume(Distinct))),
+  label(columns, subrule(ResultColumnList)),
+  // FROM is optional — `SELECT 1 + 1` is valid in most real dialects.
+  label(from, option(seq(consume(From), label(t, subrule(TableExpression)), action({"val":"t"})))),
+  label(where, option(subrule(WhereClause))),
+  label(groupBy, option(subrule(GroupByClause))),
+  label(having, option(subrule(HavingClause))),
+  label(orderBy, option(subrule(OrderByClause))),
+  label(limit, option(subrule(LimitClause))),
+  action({"obj":[
+    "type","Select",
+    "distinct",{"!==":[{"val":"distinct"},null]},
+    "columns",{"val":"columns"},
+    "from",{"val":"from"},
+    "where",{"val":"where"},
+    "groupBy",{"val":"groupBy"},
+    "having",{"val":"having"},
+    "orderBy",{"val":"orderBy"},
+    "limit",{"val":"limit"}
+  ]})
+);
+
+rule InsertStatement = seq(
+  consume(Insert), consume(Into),
+  label(table, consume(Identifier)),
+  label(columns, option(between(consume(LParen), many1Sep(subrule(Name), Comma), consume(RParen)))),
+  consume(Values),
+  label(rows, many1Sep(subrule(ValueRow), Comma)),
+  action({"obj":["type","Insert","table",{"val":["table","image"]},"columns",{"val":"columns"},"rows",{"val":"rows"}]})
+);
+
+rule ValueRow = between(consume(LParen), many1Sep(subrule(Expression), Comma), consume(RParen));
+
+rule UpdateStatement = seq(
+  consume(Update),
+  label(table, consume(Identifier)),
+  consume(Set),
+  label(assignments, many1Sep(subrule(Assignment), Comma)),
+  label(where, option(subrule(WhereClause))),
+  action({"obj":["type","Update","table",{"val":["table","image"]},"set",{"val":"assignments"},"where",{"val":"where"}]})
+);
+
+rule Assignment = seq(
+  label(col, consume(Identifier)), consume(Eq), label(value, subrule(Expression)),
+  action({"obj":["column",{"val":["col","image"]},"value",{"val":"value"}]})
+);
+
+rule DeleteStatement = seq(
+  consume(Delete), consume(From),
+  label(table, consume(Identifier)),
+  label(where, option(subrule(WhereClause))),
+  action({"obj":["type","Delete","table",{"val":["table","image"]},"where",{"val":"where"}]})
+);
+
+// -- SELECT clauses -------------------------------------------------------
+
+rule ResultColumnList = many1Sep(subrule(ResultColumn), Comma);
+
+rule ResultColumn = alt(
+  // `t.*` — tried before the generic column/expression case, which would
+  // otherwise consume `t` as a Column and fail on the unexpected `.` `*`.
+  seq(
+    label(table, consume(Identifier)), consume(Dot), consume(Star),
+    action({"obj":["type","Star","table",{"val":["table","image"]}]})
+  ),
+  seq(consume(Star), action({"obj":["type","Star"]})),
+  seq(
+    label(expr, subrule(Expression)),
+    label(alias, option(seq(option(consume(As)), label(name, subrule(Name)), action({"val":"name"})))),
+    action({"obj":["type","Column","expr",{"val":"expr"},"alias",{"val":"alias"}]})
+  )
+);
+
+rule TableRef = seq(
+  label(name, consume(Identifier)),
+  label(alias, option(seq(option(consume(As)), label(a, subrule(Name)), action({"val":"a"})))),
+  action({"obj":["type","Table","name",{"val":["name","image"]},"alias",{"val":"alias"}]})
+);
+
+rule JoinType = alt(
+  seq(consume(Inner), consume(Join), action("INNER")),
+  seq(consume(Left), option(consume(Outer)), consume(Join), action("LEFT")),
+  seq(consume(Right), option(consume(Outer)), consume(Join), action("RIGHT")),
+  seq(consume(Full), option(consume(Outer)), consume(Join), action("FULL")),
+  seq(consume(Join), action("INNER"))
+);
+
+rule Join = seq(
+  label(joinType, subrule(JoinType)),
+  label(table, subrule(TableRef)),
+  consume(On),
+  label(on, subrule(Expression)),
+  action({"obj":["type","Join","joinType",{"val":"joinType"},"table",{"val":"table"},"on",{"val":"on"}]})
+);
+
+rule TableExpression = seq(
+  label(base, subrule(TableRef)),
+  label(joins, many(subrule(Join))),
+  action({"obj":["base",{"val":"base"},"joins",{"val":"joins"}]})
+);
+
+rule WhereClause = seq(consume(Where), label(e, subrule(Expression)), action({"val":"e"}));
+
+rule GroupByClause = seq(
+  consume(Group), consume(By),
+  label(cols, many1Sep(subrule(Expression), Comma)),
+  action({"val":"cols"})
+);
+
+rule HavingClause = seq(consume(Having), label(e, subrule(Expression)), action({"val":"e"}));
+
+rule OrderItem = seq(
+  label(e, subrule(Expression)),
+  label(dir, option(alt(seq(consume(Asc), action("ASC")), seq(consume(Desc), action("DESC"))))),
+  action({"obj":["expr",{"val":"e"},"dir",{"if":[{"===":[{"val":"dir"},null]},"ASC",{"val":"dir"}]}]})
+);
+
+rule OrderByClause = seq(
+  consume(Order), consume(By),
+  label(items, many1Sep(subrule(OrderItem), Comma)),
+  action({"val":"items"})
+);
+
+rule LimitClause = seq(
+  consume(Limit), label(n, consume(Number)),
+  label(off, option(seq(consume(Offset), label(o, consume(Number)), action({"+":[{"val":["o","image"]},0]})))),
+  action({"obj":["limit",{"+":[{"val":["n","image"]},0]},"offset",{"val":"off"}]})
+);
+
+// A bare identifier's text, used wherever only the name matters (aliases,
+// INSERT's column list) rather than a full Column reference.
+rule Name = as(consume(Identifier), action({"val":"image"}));
+
+// -- expressions, by precedence -------------------------------------------
+//
+// Expression -> Or -> And -> Not -> Predicate -> Additive -> Multiplicative
+// -> Unary -> Primary. Predicate isn't a uniform infix level — a comparison,
+// IN, BETWEEN, LIKE and IS NULL all take a different shape on the right —
+// so each is its own alternative sharing the same Additive left operand,
+// tried in order, falling through to a bare Additive when none apply.
+
+rule Expression = subrule(Or);
+
+rule Or = infixLeft(
+  subrule(And), consume(Or),
+  action({"obj":["type","Or","left",{"val":"left"},"right",{"val":"right"}]})
+);
+
+rule And = infixLeft(
+  subrule(NotExpr), consume(And),
+  action({"obj":["type","And","left",{"val":"left"},"right",{"val":"right"}]})
+);
+
+rule NotExpr = prefix(
+  consume(Not), subrule(Predicate),
+  action({"obj":["type","Not","operand",{"val":"operand"}]})
+);
+
+rule Predicate = alt(
+  subrule(ComparisonPredicate),
+  subrule(InPredicate),
+  subrule(BetweenPredicate),
+  subrule(LikePredicate),
+  subrule(IsNullPredicate),
+  subrule(Additive)
+);
+
+rule ComparisonPredicate = seq(
+  label(left, subrule(Additive)),
+  label(op, alt(consume(NotEq), consume(LtEq), consume(GtEq), consume(BangEq), consume(Lt), consume(Gt), consume(Eq))),
+  label(right, subrule(Additive)),
+  action({"obj":["type","Comparison","op",{"val":["op","image"]},"left",{"val":"left"},"right",{"val":"right"}]})
+);
+
+rule InPredicate = seq(
+  label(left, subrule(Additive)),
+  label(negated, option(consume(Not))),
+  consume(In),
+  consume(LParen),
+  label(values, many1Sep(subrule(Additive), Comma)),
+  consume(RParen),
+  action({"obj":["type","In","left",{"val":"left"},"values",{"val":"values"},"negated",{"!==":[{"val":"negated"},null]}]})
+);
+
+rule BetweenPredicate = seq(
+  label(left, subrule(Additive)),
+  label(negated, option(consume(Not))),
+  consume(Between),
+  label(low, subrule(Additive)),
+  consume(And),
+  label(high, subrule(Additive)),
+  action({"obj":["type","Between","left",{"val":"left"},"low",{"val":"low"},"high",{"val":"high"},"negated",{"!==":[{"val":"negated"},null]}]})
+);
+
+rule LikePredicate = seq(
+  label(left, subrule(Additive)),
+  label(negated, option(consume(Not))),
+  consume(Like),
+  label(likePattern, subrule(Additive)),
+  action({"obj":["type","Like","left",{"val":"left"},"pattern",{"val":"likePattern"},"negated",{"!==":[{"val":"negated"},null]}]})
+);
+
+rule IsNullPredicate = seq(
+  label(left, subrule(Additive)),
+  consume(Is),
+  label(negated, option(consume(Not))),
+  consume(Null),
+  action({"obj":["type","IsNull","left",{"val":"left"},"negated",{"!==":[{"val":"negated"},null]}]})
+);
+
+rule Additive = infixLeft(
+  subrule(Multiplicative), alt(consume(Plus), consume(Minus)),
+  action({"obj":["type","BinaryOp","op",{"val":["op","image"]},"left",{"val":"left"},"right",{"val":"right"}]})
+);
+
+rule Multiplicative = infixLeft(
+  subrule(Unary), alt(consume(Star), consume(Slash)),
+  action({"obj":["type","BinaryOp","op",{"val":["op","image"]},"left",{"val":"left"},"right",{"val":"right"}]})
+);
+
+rule Unary = prefix(
+  consume(Minus), subrule(Primary),
+  action({"obj":["type","Negate","operand",{"val":"operand"}]})
+);
+
+rule Primary = alt(
+  between(consume(LParen), subrule(Expression), consume(RParen)),
+  subrule(CaseExpr),
+  subrule(FunctionCall),
+  subrule(NumberLiteral),
+  subrule(StringLiteral),
+  subrule(BooleanLiteral),
+  subrule(NullLiteral),
+  subrule(ColumnRef)
+);
+
+rule CaseExpr = seq(
+  consume(Case),
+  label(whens, many1(subrule(WhenClause))),
+  label(elseVal, option(seq(consume(Else), label(e, subrule(Expression)), action({"val":"e"})))),
+  consume(End),
+  action({"obj":["type","Case","whens",{"val":"whens"},"else",{"val":"elseVal"}]})
+);
+
+rule WhenClause = seq(
+  consume(When), label(cond, subrule(Expression)), consume(Then), label(result, subrule(Expression)),
+  action({"obj":["when",{"val":"cond"},"then",{"val":"result"}]})
+);
+
+// Tried before ColumnRef: both start with Identifier, and ordered choice
+// backtracks to ColumnRef when no `(` follows — the same shape as
+// FunctionCall/Reference colliding in formula.gram's Primary rule.
+rule FunctionCall = seq(
+  label(name, consume(Identifier)),
+  consume(LParen),
+  label(distinct, option(consume(Distinct))),
+  label(args, alt(
+    seq(consume(Star), action(["*"])),
+    manySep(subrule(Expression), Comma)
+  )),
+  consume(RParen),
+  action({"obj":["type","Call","name",{"val":["name","image"]},"args",{"val":"args"},"distinct",{"!==":[{"val":"distinct"},null]}]})
+);
+
+rule NumberLiteral = as(consume(Number), action({"+":[{"val":"image"},0]}));
+
+rule StringLiteral = as(consume(String), action({"unquote":{"val":"image"}}));
+
+rule BooleanLiteral = alt(
+  seq(consume(True), action(true)),
+  seq(consume(False), action(false))
+);
+
+rule NullLiteral = seq(consume(Null), action(null));
+
+rule ColumnRef = seq(
+  label(head, consume(Identifier)),
+  label(tail, many(seq(consume(Dot), label(n, subrule(Name)), action({"val":"n"})))),
+  action({"obj":["type","Column","name",{"reduce":[
+    {"val":"tail"},
+    {"cat":[{"val":"accumulator"},".",{"val":"current"}]},
+    {"val":["head","image"]}
+  ]}]})
+);
+
+// -- semantics -------------------------------------------------------------
+//
+// The one piece of this grammar that is not expressible as data: undoing
+// SQL's `''`-doubled-quote escaping is string manipulation, not arithmetic,
+// and JSON Logic has no string-replace primitive worth reaching for here.
+// Everything else above — comparisons, boolean logic, numeric coercion,
+// building a dotted column name — stays plain JSON Logic.
+
+methods {
+  export const unquote = {
+    method: (image) => image.slice(1, -1).replace(/''/g, "'"),
+    optimizeUnary: true
+  }
+}

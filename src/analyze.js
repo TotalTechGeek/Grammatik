@@ -60,9 +60,9 @@ export function opOf (node) {
 
 /** The set of node shapes this module understands as *parsers*. */
 export const PARSER_OPS = new Set([
-  'consume', 'seq', 'alt', 'many', 'many1', 'option',
+  'consume', 'seq', 'alt', 'many', 'many1', 'option', 'flag',
   'manySep', 'many1Sep', 'infixLeft', 'infixRight', 'postfix', 'prefix',
-  'between', 'as', 'oneOf', 'eof',
+  'between', 'pick', 'yields', 'as', 'oneOf', 'eof',
   'subrule', 'label', 'action',
   'lookahead', 'negLookahead', 'text', 'epsilon'
 ])
@@ -122,7 +122,8 @@ function firstOf (node, ruleFirsts) {
     }
 
     case 'many':
-    case 'option': {
+    case 'option':
+    case 'flag': {
       const inner = firstOf(arg, ruleFirsts)
       return { tokens: inner.tokens, nullable: true, unknown: inner.unknown }
     }
@@ -152,6 +153,11 @@ function firstOf (node, ruleFirsts) {
     case 'between':
       // Exactly a sequence of open, body, close.
       return firstOf({ seq: [arg && arg.open, arg && arg.body, arg && arg.close] }, ruleFirsts)
+
+    case 'pick':
+    case 'yields':
+      // Exactly a sequence of its parsers.
+      return firstOf({ seq: arg && Array.isArray(arg.parsers) ? arg.parsers : [] }, ruleFirsts)
 
     case 'prefix': {
       // Zero operators are allowed, so the operand's first set counts too.
@@ -254,7 +260,59 @@ export function recognizeSeqIdiom (children) {
     }
   }
 
+  // The two idioms below drop the `seq`'s bindings object, so they decline when a
+  // child could reach into an enclosing scope: without that object an outward hop
+  // would land one scope further out than it did.
+  if (children.length >= 2) {
+    const last = children[children.length - 1]
+    const head = children.slice(0, -1)
+
+    // yields: parsers, then an action that is a constant — `seq(consume(True), action(true))`
+    if (opOf(last) === 'action' && isConstant(last.action) && head.every(isPlainParser) && !head.some(usesOuterScope)) {
+      return { yields: { parsers: head, value: last.action } }
+    }
+
+    // pick: any number of unlabelled parsers around exactly one labelled one, then
+    // an action that returns just that label — `seq(consume(Where), label(e, P), action({val: e}))`.
+    // `between` is the special case with one on each side.
+    if (opOf(last) === 'action' && opOf(last.action) === 'val' && typeof last.action.val === 'string') {
+      const name = last.action.val
+      const labelled = head.map((child, i) => (opOf(child) === 'label' ? i : -1)).filter((i) => i !== -1)
+      if (labelled.length === 1 && head[labelled[0]].label[0] === name &&
+          head.every((child, i) => i === labelled[0] || isPlainParser(child)) &&
+          !head.some(usesOuterScope)) {
+        return { pick: { parsers: head.map((child, i) => (i === labelled[0] ? child.label[1] : child)), index: labelled[0] } }
+      }
+    }
+  }
+
   return null
+}
+
+/** A value that cannot be mutated or aliased: safe to hand out from every parse. */
+const isConstant = (value) =>
+  value === null || typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean'
+
+/**
+ * True when the logic reads from an outer scope (`{val: [[-1], ...]}` or
+ * `{var: "../x"}`). The engine's compiler does not thread `above` into built
+ * functions, so such actions must stay interpreted — and a rewrite that removes
+ * a `seq`'s bindings object would change what such a hop reaches.
+ */
+export function usesOuterScope (logic) {
+  if (Array.isArray(logic)) return logic.some(usesOuterScope)
+  if (!logic || typeof logic !== 'object') return false
+
+  for (const key of Object.keys(logic)) {
+    const arg = logic[key]
+    if (key === 'val' && Array.isArray(arg) && Array.isArray(arg[0])) return true
+    if (key === 'var') {
+      if (typeof arg === 'string' && arg.includes('../')) return true
+      if (Array.isArray(arg) && typeof arg[0] === 'string' && arg[0].includes('../')) return true
+    }
+    if (usesOuterScope(arg)) return true
+  }
+  return false
 }
 
 /** A node that is a parser and not one of `seq`'s own interpreted shapes. */
@@ -337,6 +395,32 @@ export function recognizeAltPrefixIdiom (branches) {
       { action: { val: '__grammatik_rest' } }
     ]
   }
+}
+
+/**
+ * Rewrites an `alt` whose every branch is a bare `consume` into `oneOf`:
+ * `alt(consume(Plus), consume(Minus))` is `oneOf(Plus, Minus)`.
+ *
+ * Same language, same value (the matched token), same expected-token list on
+ * failure — a token has one type, so "first branch that matches" and "any of
+ * these" cannot differ. What differs is cost: `alt` builds a branch per token,
+ * `oneOf` is a single test. Measured at 1.3–1.8x for the 2–7 token operator sets
+ * grammars actually have, and still 1.2x at 24.
+ *
+ * @param {any[]} branches
+ * @returns {{ oneOf: string[] } | null}
+ */
+export function recognizeAltConsumeIdiom (branches) {
+  if (!Array.isArray(branches) || branches.length < 2) return null
+  const names = []
+  for (const branch of branches) {
+    if (opOf(branch) !== 'consume') return null
+    const arg = branch.consume
+    const name = typeof arg === 'string' ? arg : (Array.isArray(arg) && arg.length === 1 ? arg[0] : null)
+    if (typeof name !== 'string') return null
+    names.push(name)
+  }
+  return { oneOf: names }
 }
 
 const BAIL = Symbol('grammatik.bail')
@@ -422,7 +506,7 @@ function computeFirsts (grammar) {
  * @param {Map<string, First>} ruleFirsts
  * @param {Set<string>} out
  */
-function leftmostCalls (node, ruleFirsts, out) {
+export function leftmostCalls (node, ruleFirsts, out) {
   const op = opOf(node)
   if (op === null) return
   const arg = node[op]
@@ -440,6 +524,7 @@ function leftmostCalls (node, ruleFirsts, out) {
     case 'many':
     case 'many1':
     case 'option':
+    case 'flag':
     case 'lookahead':
     case 'negLookahead':
       leftmostCalls(arg, ruleFirsts, out)
@@ -449,6 +534,10 @@ function leftmostCalls (node, ruleFirsts, out) {
       break
     case 'between':
       if (arg) leftmostCalls({ seq: [arg.open, arg.body, arg.close] }, ruleFirsts, out)
+      break
+    case 'pick':
+    case 'yields':
+      if (arg && Array.isArray(arg.parsers)) leftmostCalls({ seq: arg.parsers }, ruleFirsts, out)
       break
     case 'prefix':
       if (arg) {
@@ -527,6 +616,7 @@ function validateNode (node, grammar, tokenNames, errors, path) {
     case 'many':
     case 'many1':
     case 'option':
+    case 'flag':
     case 'text':
     case 'lookahead':
     case 'negLookahead':
@@ -545,6 +635,26 @@ function validateNode (node, grammar, tokenNames, errors, path) {
         validateNode(arg.open, grammar, tokenNames, errors, `${path}.between.open`)
         validateNode(arg.body, grammar, tokenNames, errors, `${path}.between.body`)
         validateNode(arg.close, grammar, tokenNames, errors, `${path}.between.close`)
+      }
+      break
+    }
+    case 'pick': {
+      if (!arg || !Array.isArray(arg.parsers) || arg.parsers.length === 0) {
+        errors.push(`${path}: 'pick' expects { parsers: [parser, ...], index }`)
+      } else if (!Number.isInteger(arg.index) || arg.index < 0 || arg.index >= arg.parsers.length) {
+        errors.push(`${path}: 'pick' index ${JSON.stringify(arg.index)} is out of range for ${arg.parsers.length} parser(s)`)
+      } else {
+        arg.parsers.forEach((c, i) => validateNode(c, grammar, tokenNames, errors, `${path}.pick[${i}]`))
+      }
+      break
+    }
+    case 'yields': {
+      if (!arg || !Array.isArray(arg.parsers) || arg.parsers.length === 0 || !('value' in arg)) {
+        errors.push(`${path}: 'yields' expects { parsers: [parser, ...], value }`)
+      } else if (!isConstant(arg.value)) {
+        errors.push(`${path}: 'yields' value must be a string, number, boolean or null, got ${JSON.stringify(arg.value)}`)
+      } else {
+        arg.parsers.forEach((c, i) => validateNode(c, grammar, tokenNames, errors, `${path}.yields[${i}]`))
       }
       break
     }

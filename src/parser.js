@@ -9,6 +9,7 @@ import { createValueMethods } from './values.js'
 import { analyze } from './analyze.js'
 import { createPlanner } from './plan.js'
 import { createCodegen } from './codegen.js'
+import { selectMemoRules } from './memoplan.js'
 import { FAIL, createState, buildParseError, ParseError } from './state.js'
 
 /**
@@ -23,6 +24,21 @@ import { FAIL, createState, buildParseError, ParseError } from './state.js'
  * @property {boolean} [memo=false]      Enable packrat memoization. Costs a Map
  *                                       write per rule invocation; pays for itself
  *                                       only on grammars that backtrack heavily.
+ * @property {boolean} [autoMemo=true]  Memoize just the rules that would otherwise be
+ *                                       re-parsed by several colliding branches of an
+ *                                       `alt` (see `selectMemoRules`). Unlike `memo` it
+ *                                       costs nothing on a grammar with no such rule,
+ *                                       and it is ignored when `memo` is on.
+ * @property {boolean} [inlineRules=true] In generated code, write single-caller operator
+ *                                       levels (`infixLeft`, `infixRight`, `prefix`, `postfix`)
+ *                                       into their caller instead of calling them. Costs code
+ *                                       size, which is why `emitModule` defaults it off.
+ * @property {boolean} [idioms=true]    Recognize common spellings (`seq(open, label, close, action)`,
+ *                                       a prefix plus one labelled result, a constant action, an
+ *                                       `alt` of bare `consume`s, a shared leading run of `alt`
+ *                                       branches) and run them as the
+ *                                       cheaper combinator they are equivalent to. Off runs the
+ *                                       grammar exactly as written; for debugging and benchmarking.
  * @property {boolean} [strict=true]     Require the whole token stream to be consumed.
  * @property {boolean} [validate=true]   Throw on grammar errors (left recursion, bad refs).
  * @property {number} [maxSteps=0]       Runaway guard; 0 disables.
@@ -75,6 +91,9 @@ export function createParser (spec, options = {}) {
   const { tokens: tokenDefs, rules, start } = spec
   const {
     memo = false,
+    autoMemo = true,
+    inlineRules = true,
+    idioms = true,
     strict = true,
     validate = true,
     maxSteps = 0,
@@ -123,7 +142,14 @@ export function createParser (spec, options = {}) {
 
   // The planner specializes the grammar into closures; the combinators'
   // `compile` hooks reach it through the engine.
-  const planner = createPlanner({ engine, rules, firsts, memo, maxSteps, unsafeEval, tokenIds })
+  // Which rules to remember per position. Global `memo` already remembers all of
+  // them, and `validate: false` can hand us a grammar the analysis did not accept.
+  const memoRules = autoMemo && !memo && analysis.errors.length === 0
+    ? selectMemoRules(rules, analysis.firsts, { ll1 })
+    : []
+  const memoSlots = new Map(memoRules.map((name, slot) => [name, slot]))
+
+  const planner = createPlanner({ engine, rules, firsts, memo, maxSteps, unsafeEval, tokenIds, memoSlots, idioms })
   engine.__jlGrammar = { planner }
 
   // Source generation emits one JS function per rule with every node inlined,
@@ -132,7 +158,7 @@ export function createParser (spec, options = {}) {
   // lands on the generated code rather than a method dispatch.
   // Code generation needs `new Function`, so it is off whenever eval is.
   const codegen = compile && unsafeEval
-    ? createCodegen({ planner, rules, firsts, memo, maxSteps, tokenIds })
+    ? createCodegen({ planner, rules, firsts, memo, maxSteps, tokenIds, memoSlots, inlineRules, idioms })
     : null
   const compiledStart = codegen && codegen.compile(start)
 
@@ -149,7 +175,7 @@ export function createParser (spec, options = {}) {
    * @param {string} [source] Original text, so `text` can slice exact spans.
    */
   function parseTokens (tokens, source, track = false) {
-    const state = createState(tokens, rules, { memo, maxSteps, track })
+    const state = createState(tokens, rules, { memo, maxSteps, track, memoSlots: memoRules.length })
     state.firsts = firsts
     state.source = source
     state.positions = lexer.positions
@@ -192,6 +218,8 @@ export function createParser (spec, options = {}) {
     planner,
     codegen,
     execution: mode,
+    /** Rules memoized by `autoMemo`, for introspection. */
+    memoRules,
     compiled: Boolean(compiledStart),
     /** Rules whose `alt`s resolved to O(1) LL(1) dispatch, for introspection. */
     get firsts () { return analysis.firsts }

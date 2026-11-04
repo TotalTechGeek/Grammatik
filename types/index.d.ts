@@ -70,6 +70,29 @@ export interface ParserOptions {
   positions?: PositionMode
   /** Packrat memoization on (rule, position). */
   memo?: boolean
+  /**
+   * Memoize only the rules that several colliding branches of an `alt` would
+   * otherwise each re-parse (default `true`; ignored when `memo` is on). Avoids
+   * the exponential blow-up of nested alternatives that share a leading rule,
+   * at no cost to a grammar with none. See `memoRules`.
+   */
+  autoMemo?: boolean
+  /**
+   * In generated code, write single-caller operator levels (`infixLeft`,
+   * `infixRight`, `prefix`, `postfix`) into their caller instead of calling them
+   * (default `true` for `createParser`, `false` for `emitModule`). Several levels of an
+   * expression grammar become one function: 2-3x faster on a bare precedence chain, about
+   * 1.02-1.04x on real grammars, at the cost of a bigger file, which is why an emitted
+   * parser leaves it off.
+   */
+  inlineRules?: boolean
+  /**
+   * Recognize common spellings of a grammar (`seq(open, label, close, action)`, a
+   * prefix plus one labelled result, a constant action, an `alt` of bare `consume`s,
+   * a shared leading run of `alt` branches) and run them as the cheaper combinator
+   * they are equivalent to. Default `true`; `false` runs the grammar exactly as written.
+   */
+  idioms?: boolean
   /** Require the whole token stream to be consumed. */
   strict?: boolean
   /** FIRST-set dispatch for `alt`. Off forces ordered backtracking. */
@@ -109,6 +132,8 @@ export interface JLParser {
   engine: any
   analysis: Analysis
   execution: ExecutionMode
+  /** The rules `autoMemo` chose to memoize, in declaration order. */
+  memoRules: string[]
   compiled: boolean
   readonly firsts: Record<string, Set<string>>
 }
@@ -126,6 +151,17 @@ export declare function analyze (
 ): Analysis
 
 export interface EmitOptions extends ParserOptions {
+  /**
+   * How the file lexes. `'generated'` (default) writes the lexer out as source, so the
+   * file imports only the parse state and error class from the runtime: a smaller
+   * bundle (JSON: 24 KB to 10 KB minified), a faster start, and faster lexing.
+   * `'runtime'` keeps the token table and builds the lexer from it when the file loads.
+   */
+  lexer?: 'generated' | 'runtime'
+  /** Scanner substitution for the lexer, as for `createLexer`. Default `true`. */
+  scanners?: boolean
+  /** Fusing runs of regex tokens in the lexer, as for `createLexer`. Default `true`. */
+  fuse?: boolean
   /** Module format of the generated file. */
   format?: 'esm' | 'cjs'
   /** Name recorded in the file header. Defaults to `spec.name`. */

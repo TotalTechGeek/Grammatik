@@ -27,14 +27,25 @@ export const FAIL = Symbol('grammatik.fail')
  * @property {boolean} track        Whether to record error-reporting detail.
  * @property {number} steps         Combinator invocations, for the runaway guard.
  * @property {number} maxSteps      0 disables the guard.
+ * @property {{ ends: Int32Array, vals: any[] }[]|null} rm  Per-rule memo tables for the
+ *   rules chosen by `selectMemoRules`, indexed by slot. `ends[i]` is the cursor
+ *   after the rule ran at token `i`, plus one (0 means "not seen yet"); `vals[i]`
+ *   is what it returned.
  */
 
 /**
  * @param {import('./lexer.js').Token[]} tokens
  * @param {Record<string, any>} grammar
- * @param {{ memo?: boolean, maxSteps?: number, track?: boolean }} [options]
+ * @param {{ memo?: boolean, maxSteps?: number, track?: boolean, memoSlots?: number }} [options]
  * @returns {ParserState}
  */
+const memoTables = (slots, length) => {
+  if (!slots) return null
+  const tables = new Array(slots)
+  for (let i = 0; i < slots; i++) tables[i] = { ends: new Int32Array(length + 1), vals: new Array(length + 1) }
+  return tables
+}
+
 export const createState = (tokens, grammar, options = {}) => ({
   tokens,
   idx: 0,
@@ -42,6 +53,7 @@ export const createState = (tokens, grammar, options = {}) => ({
   expected: [],
   grammar,
   memo: options.memo ? new Map() : null,
+  rm: memoTables(options.memoSlots, tokens.length),
   // Entering a rule is one array store rather than an object allocation, and
   // the stack is snapshotted only on a furthest failure — by the time an error
   // is built it would otherwise have unwound to just the start rule.
@@ -77,6 +89,26 @@ export function expect (state, expectation) {
   }
   if (!state.track || state.idx !== state.maxIdx) return
   if (!state.expected.includes(expectation)) state.expected.push(expectation)
+}
+
+/**
+ * Thrown when no token matches. It lives here, beside `ParseError`, rather than in
+ * the lexer: a parser whose lexer was generated as source needs this class and
+ * nothing else from the lexer module, and importing it from there would pull the
+ * whole lexer engine back into the bundle.
+ */
+export class LexError extends Error {
+  /**
+   * @param {string} message
+   * @param {{ offset: number, line: number, col: number }} position
+   */
+  constructor (message, position) {
+    super(message)
+    this.name = 'LexError'
+    this.offset = position.offset
+    this.line = position.line
+    this.col = position.col
+  }
 }
 
 export class ParseError extends Error {

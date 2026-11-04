@@ -325,3 +325,70 @@ describe('a factored alt matches its shared prefix once per attempt, not once pe
     })
   }
 })
+
+describe('recognizeSeqIdiom: pick and yields', () => {
+  const A = { consume: 'A' }
+  const B = { consume: 'B' }
+  const C = { consume: 'C' }
+
+  it('rewrites a prefix, one label and a return of it into pick', () => {
+    expect(recognizeSeqIdiom([A, { label: ['e', B] }, { action: { val: 'e' } }])).toEqual({
+      pick: { parsers: [A, B], index: 1 }
+    })
+  })
+
+  it('keeps the labelled parser at its own position, wherever it is', () => {
+    expect(recognizeSeqIdiom([{ label: ['x', A] }, B, C, { action: { val: 'x' } }])).toEqual({
+      pick: { parsers: [A, B, C], index: 0 }
+    })
+    expect(recognizeSeqIdiom([A, B, { label: ['x', C] }, { action: { val: 'x' } }])).toEqual({
+      pick: { parsers: [A, B, C], index: 2 }
+    })
+  })
+
+  it('still prefers between for open/body/close', () => {
+    expect(recognizeSeqIdiom([A, { label: ['n', B] }, C, { action: { val: 'n' } }])).toEqual({
+      between: { open: A, body: B, close: C }
+    })
+  })
+
+  it('declines pick when the action wants something other than that label', () => {
+    expect(recognizeSeqIdiom([A, { label: ['e', B] }, { action: { val: 'other' } }])).toBeNull()
+    expect(recognizeSeqIdiom([A, { label: ['e', B] }, { action: { val: ['e', 'image'] } }])).toBeNull()
+    expect(recognizeSeqIdiom([A, { label: ['e', B] }, { action: { '+': [{ val: 'e' }, 1] } }])).toBeNull()
+  })
+
+  it('declines pick with two labels, or none', () => {
+    expect(recognizeSeqIdiom([{ label: ['a', A] }, { label: ['e', B] }, { action: { val: 'e' } }])).toBeNull()
+    expect(recognizeSeqIdiom([A, B, { action: { val: 'e' } }])).toBeNull()
+  })
+
+  it('declines when a plain child could hop to an enclosing scope', () => {
+    const hops = { as: [B, { val: [[1], 'x'] }] }
+    expect(recognizeSeqIdiom([A, hops, { label: ['e', C] }, { action: { val: 'e' } }])).toBeNull()
+    expect(recognizeSeqIdiom([hops, A, { action: true }])).toBeNull()
+  })
+
+  it('rewrites unlabelled parsers and a constant action into yields', () => {
+    expect(recognizeSeqIdiom([A, { action: 'ASC' }])).toEqual({ yields: { parsers: [A], value: 'ASC' } })
+    expect(recognizeSeqIdiom([A, B, { action: null }])).toEqual({ yields: { parsers: [A, B], value: null } })
+    expect(recognizeSeqIdiom([A, { action: false }])).toEqual({ yields: { parsers: [A], value: false } })
+    expect(recognizeSeqIdiom([A, { action: 0 }])).toEqual({ yields: { parsers: [A], value: 0 } })
+  })
+
+  it('declines yields for a constant object or array, which would be shared between parses', () => {
+    expect(recognizeSeqIdiom([A, { action: ['*'] }])).toBeNull()
+    expect(recognizeSeqIdiom([A, { action: { type: 'Star' } }])).toBeNull()
+  })
+
+  it('declines yields when there is nothing to parse, or a label is in the way', () => {
+    expect(recognizeSeqIdiom([{ action: 1 }])).toBeNull()
+    expect(recognizeSeqIdiom([{ label: ['x', A] }, { action: 1 }])).toEqual({ as: [A, 1] }) // the existing `as` idiom
+    expect(recognizeSeqIdiom([{ label: ['x', A] }, B, { action: 1 }])).toBeNull()
+  })
+
+  it('declines yields for logic that reads the context', () => {
+    expect(recognizeSeqIdiom([A, { action: { val: [] } }])).toBeNull()
+    expect(recognizeSeqIdiom([A, { action: { '+': [1, 2] } }])).toBeNull()
+  })
+})

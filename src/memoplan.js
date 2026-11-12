@@ -1,7 +1,7 @@
 // @ts-check
 'use strict'
 
-import { opOf, firstOf, buildDispatch, leftmostCalls } from './analyze.js'
+import { opOf, firstOf, buildDispatch, leftmostCalls, recognizeAltFactoring, recognizeAltConsumeIdiom, recognizeAltPrefixIdiom } from './analyze.js'
 import { usesOuterScope } from './plan.js'
 
 /**
@@ -53,6 +53,7 @@ import { usesOuterScope } from './plan.js'
  */
 export function selectMemoRules (grammar, firsts, options = {}) {
   const ll1 = options.ll1 !== false
+  const skipAlt = options.skipAlt || null
   const names = Object.keys(grammar)
 
   /** Rules a rule can invoke first, with no token consumed before. */
@@ -115,6 +116,7 @@ export function selectMemoRules (grammar, firsts, options = {}) {
   for (const name of names) {
     walk(grammar[name], (node) => {
       if (opOf(node) !== 'alt' || !Array.isArray(node.alt) || node.alt.length < 2) return
+      if (skipAlt !== null && skipAlt(node, name)) return
 
       for (const group of collisionGroups(node.alt, firsts, ll1)) {
         const counts = new Map()
@@ -219,4 +221,32 @@ function walk (node, visit) {
       if (arg) { walk(arg.rule, visit); if (typeof arg.sep !== 'string') walk(arg.sep, visit) }
       break
   }
+}
+
+/**
+ * Which rules to memoize, and which of those the first pass can do without.
+ *
+ * Generated code parses the shared prefix of an `alt` once (see `recognizeAltFactoring`), but only while not
+ * tracking: the tracked re-run that builds an error message runs the `alt` as written. A rule chosen only
+ * because of such an `alt` is therefore needed by the re-run and not by the first pass, and its memo tables
+ * are work the first pass pays for and never reads. Those are returned as `trackedOnly`.
+ *
+ * @param {Record<string, any>} grammar
+ * @param {Map<string, import('./analyze.js').First>} firsts
+ * @param {{ ll1?: boolean, factoring?: boolean, idioms?: boolean }} [options]
+ *   `factoring` says generated code will factor, which is only so for generated code with `ll1` on.
+ * @returns {{ rules: string[], trackedOnly: Set<string> }}
+ */
+export function planMemo (grammar, firsts, options = {}) {
+  const rules = selectMemoRules(grammar, firsts, options)
+  if (!options.factoring || options.ll1 === false || rules.length === 0) return { rules, trackedOnly: new Set() }
+  const idioms = options.idioms !== false
+  // The same test codegen applies: a rule body that is itself an `alt` (no enclosing sequence scope) that no
+  // other idiom takes first and whose branches share their leading parsers.
+  const factored = (node, host) =>
+    grammar[host] === node &&
+    !(idioms && (recognizeAltConsumeIdiom(node.alt) || recognizeAltPrefixIdiom(node.alt))) &&
+    recognizeAltFactoring(node.alt, grammar) !== null
+  const needed = new Set(selectMemoRules(grammar, firsts, { ...options, skipAlt: factored }))
+  return { rules, trackedOnly: new Set(rules.filter((name) => !needed.has(name))) }
 }

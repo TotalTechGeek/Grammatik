@@ -6,7 +6,7 @@ import { generateLexer } from './lexgen.js'
 import { analyze } from './analyze.js'
 import { createPlanner } from './plan.js'
 import { createCodegen } from './codegen.js'
-import { selectMemoRules } from './memoplan.js'
+import { planMemo } from './memoplan.js'
 import { usesOuterScope } from './plan.js'
 import { emitMethodsBlock, evaluateMethodsBlock } from './methodsblock.js'
 import { createValueMethods } from './values.js'
@@ -163,12 +163,14 @@ export function emitModule (spec, options = {}) {
   // comment in parser.js.
   const tokenIds = new Map(lexer.tokenNames.map((name, id) => [name, id]))
   const engine = { build: () => { throw new Error('not compiled during emit') }, run: () => {} }
-  const memoRules = autoMemo && !memo && analysis.errors.length === 0
-    ? selectMemoRules(rules, analysis.firsts, { ll1 })
-    : []
+  const memoPlan = autoMemo && !memo && analysis.errors.length === 0
+    ? planMemo(rules, analysis.firsts, { ll1, idioms, factoring })
+    : { rules: [], trackedOnly: new Set() }
+  const memoRules = memoPlan.rules
   const memoSlots = new Map(memoRules.map((name, slot) => [name, slot]))
+  const firstPassMemo = memoRules.length > memoPlan.trackedOnly.size
   const planner = createPlanner({ engine, rules, firsts, memo, maxSteps, unsafeEval: false, tokenIds, memoSlots, idioms })
-  const codegen = createCodegen({ planner, rules, firsts, firsts2: ll1 ? analysis.firsts2 : null, lookahead, precedence, factoring, memo, maxSteps, tokenIds, memoSlots, inlineRules, idioms })
+  const codegen = createCodegen({ planner, rules, firsts, firsts2: ll1 ? analysis.firsts2 : null, lookahead, precedence, factoring, trackedMemo: memoPlan.trackedOnly, memo, maxSteps, tokenIds, memoSlots, inlineRules, idioms })
 
   codegen.compile(start)
 
@@ -382,7 +384,7 @@ const RULES = ${literal(Object.fromEntries(reached.map(([name, index]) => [name,
  * @param {string} [source]
  */
 function parseTokens (tokenList, source, track = false) {
-  const state = createState(tokenList, {}, { memo: ${memo}, maxSteps: ${maxSteps}, track, memoSlots: ${memoRules.length} })
+  const state = createState(tokenList, {}, { memo: ${memo}, maxSteps: ${maxSteps}, track, memoSlots: ${firstPassMemo || memoRules.length === 0 ? memoRules.length : `track ? ${memoRules.length} : 0`} })
   state.source = source
   state.positions = ${quote(positions)}
   state.ruleNames[0] = start

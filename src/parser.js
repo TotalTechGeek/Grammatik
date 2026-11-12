@@ -9,7 +9,7 @@ import { createValueMethods } from './values.js'
 import { analyze } from './analyze.js'
 import { createPlanner } from './plan.js'
 import { createCodegen } from './codegen.js'
-import { selectMemoRules } from './memoplan.js'
+import { planMemo } from './memoplan.js'
 import { FAIL, createState, buildParseError, ParseError } from './state.js'
 
 /**
@@ -159,10 +159,14 @@ export function createParser (spec, options = {}) {
   // `compile` hooks reach it through the engine.
   // Which rules to remember per position. Global `memo` already remembers all of
   // them, and `validate: false` can hand us a grammar the analysis did not accept.
-  const memoRules = autoMemo && !memo && analysis.errors.length === 0
-    ? selectMemoRules(rules, analysis.firsts, { ll1 })
-    : []
+  const memoPlan = autoMemo && !memo && analysis.errors.length === 0
+    ? planMemo(rules, analysis.firsts, { ll1, idioms, factoring: factoring && compile && unsafeEval })
+    : { rules: [], trackedOnly: new Set() }
+  const memoRules = memoPlan.rules
   const memoSlots = new Map(memoRules.map((name, slot) => [name, slot]))
+  // Tables are allocated for the first pass only if some rule still needs them there; the tracked re-run
+  // always gets them.
+  const firstPassMemo = memoRules.length > memoPlan.trackedOnly.size
 
   const planner = createPlanner({ engine, rules, firsts, memo, maxSteps, unsafeEval, tokenIds, memoSlots, idioms })
   engine.__jlGrammar = { planner }
@@ -173,7 +177,7 @@ export function createParser (spec, options = {}) {
   // lands on the generated code rather than a method dispatch.
   // Code generation needs `new Function`, so it is off whenever eval is.
   const codegen = compile && unsafeEval
-    ? createCodegen({ planner, rules, firsts, firsts2: ll1 ? analysis.firsts2 : null, lookahead, precedence, factoring, memo, maxSteps, tokenIds, memoSlots, inlineRules, idioms })
+    ? createCodegen({ planner, rules, firsts, firsts2: ll1 ? analysis.firsts2 : null, lookahead, precedence, factoring, trackedMemo: memoPlan.trackedOnly, memo, maxSteps, tokenIds, memoSlots, inlineRules, idioms })
     : null
   const compiledStart = codegen && codegen.compile(start)
 
@@ -190,7 +194,7 @@ export function createParser (spec, options = {}) {
    * @param {string} [source] Original text, so `text` can slice exact spans.
    */
   function parseTokens (tokens, source, track = false) {
-    const state = createState(tokens, rules, { memo, maxSteps, track, memoSlots: memoRules.length })
+    const state = createState(tokens, rules, { memo, maxSteps, track, memoSlots: track || firstPassMemo ? memoRules.length : 0 })
     state.firsts = firsts
     state.source = source
     state.positions = lexer.positions

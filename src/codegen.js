@@ -25,10 +25,11 @@ import { buildDispatch, secondTokenMasks, recognizeAltFactoring, firstOf, opOf, 
  * @param {{ planner: any, rules: Record<string, any>, firsts: Map<string, any>|null,
  *           memo: boolean, maxSteps: number, tokenIds?: Map<string, number>|null,
  *           memoSlots?: Map<string, number>, inlineRules?: boolean, idioms?: boolean,
- *           firsts2?: Map<string, any>|null, lookahead?: boolean, precedence?: boolean, factoring?: boolean }} config
+ *           firsts2?: Map<string, any>|null, lookahead?: boolean, precedence?: boolean, factoring?: boolean,
+ *           trackedMemo?: Set<string> }} config
  */
 export function createCodegen (config) {
-  const { planner, rules, firsts, memo, maxSteps, tokenIds = null, memoSlots = new Map(), inlineRules = true, idioms = true, firsts2 = null, lookahead = true, precedence = true, factoring = true } = config
+  const { planner, rules, firsts, memo, maxSteps, tokenIds = null, memoSlots = new Map(), inlineRules = true, idioms = true, firsts2 = null, lookahead = true, precedence = true, factoring = true, trackedMemo = new Set() } = config
 
   /**
    * `token.id === <n>` is an integer compare instead of a string compare, and
@@ -593,12 +594,16 @@ export function createCodegen (config) {
             '}'
           )
         } else if (memoSlots.has(name)) {
-          // Chosen by `selectMemoRules`: remember the result per position.
+          // Chosen by `selectMemoRules`: remember the result per position. A rule chosen only because of an
+          // `alt` that generated code factors is needed only by the tracked re-run, where that `alt` is run
+          // as written; the first pass calls it plainly.
           const table = nextId()
           const at = nextId()
           const end = nextId()
+          const trackedOnly = trackedMemo.has(name)
+          out.push(`let ${result};`)
+          if (trackedOnly) out.push('if (c.track) {')
           out.push(
-            `let ${result};`,
             `const ${table} = c.rm[${memoSlots.get(name)}];`,
             `const ${at} = c.idx;`,
             `const ${end} = ${table}.ends[${at}];`,
@@ -613,6 +618,7 @@ export function createCodegen (config) {
             `${table}.vals[${at}] = ${result};`,
             '}'
           )
+          if (trackedOnly) out.push('} else {', `${result} = R[${index}](c);`, '}')
         } else {
           out.push(
             `const ${parent} = c.ruleDepth;`,

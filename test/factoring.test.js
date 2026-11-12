@@ -3,6 +3,8 @@ import { describe, it, expect } from 'vitest'
 
 import { createParser, createParserFromSource, emitModule } from '../src/index.js'
 import { recognizeAltFactoring } from '../src/analyze.js'
+import { planMemo, selectMemoRules } from '../src/memoplan.js'
+import { analyze } from '../src/analyze.js'
 
 /**
  * Branches that all begin with the same parsers (`ComparisonPredicate`, `InPredicate`, ... each start with
@@ -316,5 +318,80 @@ describe.each([true, false])('factoring does not change what parses or what an e
     })
     expect(valid).toBeGreaterThan(100)
     expect(invalid).toBeGreaterThan(200)
+  })
+})
+
+// ---- the memo tables that factoring makes unnecessary on the first pass ----
+
+/** `Pred` over a `Base` that can contain a parenthesised `Pred`, so re-parsing the shared prefix compounds with depth. */
+function nested () {
+  const spec = grammar()
+  spec.rules.Base = {
+    alt: [
+      { as: [c('Num'), val('image')] },
+      { between: { open: c('LParen'), body: rule('Pred'), close: c('RParen') } }
+    ]
+  }
+  return spec
+}
+
+describe('planMemo', () => {
+  const plan = (spec, options = {}) => {
+    const { firsts } = analyze(spec.rules, { tokenNames: spec.tokens.map((t) => t.name) })
+    return planMemo(spec.rules, firsts, { factoring: true, ...options })
+  }
+
+  it('marks a rule chosen only because of an alt that is factored as needed by the tracked re-run alone', () => {
+    const found = plan(nested())
+    expect(found.rules).toEqual(['Base'])
+    expect([...found.trackedOnly]).toEqual(['Base'])
+  })
+
+  it('keeps the memo for the first pass when factoring will not run', () => {
+    expect(plan(nested(), { factoring: false }).trackedOnly.size).toBe(0)
+    expect(plan(nested(), { ll1: false }).trackedOnly.size).toBe(0)
+  })
+
+  it('keeps it when the alt cannot be factored', () => {
+    // A tail with no action: its value is a list, which factoring declines.
+    const spec = nested()
+    spec.rules.IsP = { seq: [label('left', rule('Base')), c('Is'), c('Null')] }
+    const found = plan(spec)
+    expect(found.rules).toEqual(['Base'])
+    expect(found.trackedOnly.size).toBe(0)
+  })
+
+  it('picks the same rules as before, only sorting them into two kinds', () => {
+    const spec = nested()
+    const { firsts } = analyze(spec.rules, { tokenNames: spec.tokens.map((t) => t.name) })
+    expect(plan(spec).rules).toEqual(selectMemoRules(spec.rules, firsts, {}))
+  })
+})
+
+describe('the tracked re-run keeps its memo', () => {
+  const deep = (n, tail) => '('.repeat(n) + tail + ')'.repeat(n)
+
+  it('so an error in deeply nested input is still found without compounding', () => {
+    // Re-parsing the shared prefix costs 3x per level of nesting without the memo: three tails, each starting
+    // by parsing `Base` again, so depth 24 is minutes of work. The step budget turns that into a prompt,
+    // readable failure (the compounding is synchronous, and a test timeout cannot interrupt it).
+    const parser = createParser(nested(), { maxSteps: 200000 })
+    const message = (() => { try { parser.parse(deep(24, '1 =')); return 'parsed' } catch (e) { return e.message } })()
+    expect(message).not.toMatch(/maxSteps/)
+    expect(message).toMatch(/Expecting/)
+  })
+
+  it('and reports the same error as a parser that never factored', () => {
+    const on = createParser(nested(), { maxSteps: 5_000_000 })
+    const off = createParser(nested(), { factoring: false, maxSteps: 5_000_000 })
+    for (const input of [deep(10, '1 ='), deep(10, '1 is'), deep(10, '1 in ('), deep(8, '1 is not null'), deep(10, '1')]) {
+      expect(outcome(on, input), input).toBe(outcome(off, input))
+    }
+  })
+
+  it('writes the tables into an emitted module for the re-run, and only for the re-run', () => {
+    const source = emitModule(nested(), { runtimeSpecifier: './runtime.js' })
+    expect(source).toContain('memoSlots: track ? 1 : 0')
+    expect(source).toContain('c.rm[0]')
   })
 })

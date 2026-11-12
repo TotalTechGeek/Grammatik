@@ -2,7 +2,7 @@
 'use strict'
 
 import { firstCharSet } from './firstchars.js'
-import { buildScanner, SCANNER_KINDS } from './scan.js'
+import { buildScanner, mayContainNewline, SCANNER_KINDS } from './scan.js'
 
 /**
  * Writes a grammar's lexer out as JavaScript source.
@@ -243,27 +243,7 @@ export function generateLexer (defs, options = {}) {
 
   // ---- longerAlt: after a token matches, a longer match of its alternative wins ----
   const longer = compiled.filter((c) => c.longerAlt)
-  // Can this token's text ever contain a line feed? If not, the newline scan after it is a pass over its
-  // characters that can find nothing, and in `full` mode that pass touches every character of the input.
-  // The answer has to be exact in the "no" direction: a wrong "no" corrupts every later line number.
-  // Anything not understood says yes.
-  const mayNewline = (c) => {
-    if (c.literal !== undefined) return c.literal.includes('\n')
-    const sc = c.scanner
-    if (sc === null) return true // a regex, fused or not
-    switch (sc.kind) {
-      case SCANNER_KINDS.CLASS: return sc.first[10] === 1 || sc.rest[10] === 1
-      case SCANNER_KINDS.SEQ2: return sc.first[10] === 1 || sc.second[10] === 1
-      case SCANNER_KINDS.KEYWORD: return sc.lower.includes(10) || sc.upper.includes(10) // a word of [A-Za-z0-9_], and its lookahead consumes nothing
-      case SCANNER_KINDS.LINE: return sc.prefix.includes('\n') || sc.look[10] !== 1 // runs until a character in `look`
-      case SCANNER_KINDS.NUMBER: return false // digits, a sign, `.`, `e`
-      // Ordinary characters are anything but the quote and backslash, less the control characters when
-      // `ctrl` is set; after a backslash comes any one character (`escAny`) or one from `esc`.
-      case SCANNER_KINDS.STRING: return sc.escAny || !sc.ctrl || sc.esc[10] === 1
-      default: return true // QUOTED: `[^']` takes a newline
-    }
-  }
-  const NL = compiled.map((c) => (mayNewline(c) ? 1 : 0))
+  const NL = compiled.map((c) => (mayContainNewline(c) ? 1 : 0))
   const longerCode = longer.length === 0
     ? ''
     : `

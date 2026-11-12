@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 
 import { createLexer } from '../src/lexer.js'
-import { buildScanner, scanEnd, DEFER } from '../src/scan.js'
+import { buildScanner, mayContainNewline, scanEnd, DEFER } from '../src/scan.js'
 import { parseDefinition } from '../src/index.js'
 import { grammar as json } from '../examples/json.js'
 
@@ -32,6 +32,8 @@ const FRAGMENTS = [
   '-', '--', '/*', '*/', 'S', 'e', 'L', 'E', 'C', 'T', 's', 'select', 'SELECT', 'Select', 'selec', 'f',
   'From', 'FROM', 'IN', 'in', 'int', 'ınt', 'K', 'K', 'ſ', 'A1', '$', 'x9', '7', '.', '1e5',
   '#N/A', 'TRUE', '[', ']', 'items', '12ab',
+  // a comment opener and its stop character, so a run can cross a line feed before it ends
+  '#', '#a', '@',
   // numbers: leading zeros, signs, incomplete fractions and exponents
   '0', '-0', '00', '01', '-', '--', '+', '.', '1.', '.5', '1.5', '2e', 'e5', '1e5', '1E+5', '1e-', '1.5e+', '12.34E-56', '9',
   // strings: escapes (valid, invalid, truncated), controls, non-ASCII, the other quote
@@ -64,7 +66,11 @@ const PATTERNS = [
   { pattern: "'(?:[^'\\\\]|\\\\.)*'" },
   { pattern: '"(?:[^"\\\\\\u0000-\\u001f]|\\\\(?:["\\\\/bfnrt]|u[0-9a-fA-F]{4}))*"' },
   { pattern: '"(?:[^"\\\\]|\\\\(?:["\\\\/bfnrt]))*"' },
-  { pattern: "'(?:[^'\\\\]|\\\\(?:['\\\\nt]|u[0-9a-fA-F]{4}))*'" }
+  { pattern: "'(?:[^'\\\\]|\\\\(?:['\\\\nt]|u[0-9a-fA-F]{4}))*'" },
+  // tokens that can span lines in ways a careless analysis misses: a line comment whose stop set lacks the
+  // line feed, and a string with control characters excluded whose escapes include one
+  { pattern: '#[^@]*' },
+  { pattern: '"(?:[^"\\\\\\u0000-\\u001f]|\\\\(?:["\\\\\\n]))*"' }
 ].filter((t) => t.pattern)
 
 describe('scanEnd agrees with the regex it stands in for', () => {
@@ -94,6 +100,47 @@ describe('scanEnd agrees with the regex it stands in for', () => {
       }
     })
   }
+})
+
+describe('mayContainNewline never says no to a token that holds one', () => {
+  // `full` positions skip counting line feeds inside a token it calls newline-free, so a wrong "no" would
+  // corrupt every later line number. The regex is the ground truth: whatever it actually matches.
+  const scannable = PATTERNS.filter((t) => buildScanner(t.pattern, !!t.ignoreCase))
+  const verdicts = scannable.map((t) => mayContainNewline({ literal: undefined, scanner: buildScanner(t.pattern, !!t.ignoreCase) }))
+
+  it('is not vacuous: it clears plenty of patterns and keeps plenty', () => {
+    expect(verdicts.filter((v) => v === false).length).toBeGreaterThan(10)
+    expect(verdicts.filter((v) => v === true).length).toBeGreaterThan(5)
+  })
+
+  scannable.forEach((t, index) => {
+    if (verdicts[index]) return // only a claim of "no newline" can be wrong in a way that matters
+    it(`${t.pattern}${t.ignoreCase ? ' (ignoreCase)' : ''}`, () => {
+      const re = new RegExp(t.pattern, t.ignoreCase ? 'iy' : 'y')
+      const rand = prng(0xbadf00d)
+      for (let n = 0; n < 4000; n++) {
+        let text = ''
+        for (let k = Math.floor(rand() * 8); k > 0; k--) text += FRAGMENTS[Math.floor(rand() * FRAGMENTS.length)]
+        if (text.length === 0) continue
+        const offset = Math.floor(rand() * text.length)
+        re.lastIndex = offset
+        const m = re.exec(text)
+        if (m) expect(m[0].includes('\n'), JSON.stringify({ text, offset, matched: m[0] })).toBe(false)
+      }
+    })
+  })
+
+  it('says yes for the shapes whose text can hold one', () => {
+    const may = (pattern) => mayContainNewline({ literal: undefined, scanner: buildScanner(pattern, false) })
+    expect(may('#[^@]*')).toBe(true) // runs until `@`, so it takes line feeds
+    expect(may('#[^\\n]*')).toBe(false)
+    expect(may('"(?:[^"\\\\]|\\\\(?:["\\\\/bfnrt]))*"')).toBe(true) // no control-character exclusion
+    expect(may('"(?:[^"\\\\\\u0000-\\u001f]|\\\\(?:["\\\\/bfnrt]))*"')).toBe(false)
+    expect(may("'(?:''|[^'])*'")).toBe(true)
+    expect(mayContainNewline({ literal: 'a\nb', scanner: null })).toBe(true)
+    expect(mayContainNewline({ literal: ',', scanner: null })).toBe(false)
+    expect(mayContainNewline({ literal: undefined, scanner: null })).toBe(true) // a regex no scanner covers
+  })
 })
 
 describe('buildScanner takes the number and string family', () => {

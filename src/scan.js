@@ -256,6 +256,33 @@ export function buildScanner (source, ignoreCase) {
   return null
 }
 
+/**
+ * Whether a token's text can ever contain a line feed. `full` position mode counts line feeds inside every
+ * token it produces; a token that provably cannot hold one lets that pass be skipped, which on a lexer
+ * whose tokens are mostly punctuation, numbers and names is most of them. The answer has to be exact in
+ * the "no" direction, because a wrong "no" makes every later line and column wrong; anything not
+ * understood says yes.
+ *
+ * @param {{ literal: string | undefined, scanner: Scanner | null }} def
+ * @returns {boolean}
+ */
+export function mayContainNewline (def) {
+  if (def.literal !== undefined) return def.literal.includes('\n')
+  const sc = def.scanner
+  if (sc === null) return true // a regex, fused or not
+  switch (sc.kind) {
+    case CLASS: return sc.first[10] === 1 || sc.rest[10] === 1
+    case SEQ2: return sc.first[10] === 1 || sc.second[10] === 1
+    case KEYWORD: return sc.lower.includes(10) || sc.upper.includes(10) // a word of [A-Za-z0-9_]; the lookahead consumes nothing
+    case LINE: return sc.prefix.includes('\n') || sc.look[10] !== 1 // runs until a character in `look`
+    case NUMBER: return false // digits, a sign, `.`, `e`
+    // Ordinary characters are anything but the quote and backslash, less the control characters when `ctrl`
+    // is set; after a backslash comes any one character (`escAny`) or one from `esc`.
+    case STRING: return sc.escAny || !sc.ctrl || sc.esc[10] === 1
+    default: return true // QUOTED: `[^']` takes a newline
+  }
+}
+
 const skipDigits = (text, i, length) => {
   while (i < length) {
     const c = text.charCodeAt(i)

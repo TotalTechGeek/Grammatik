@@ -2,7 +2,7 @@
 'use strict'
 
 import { firstCharSet } from './firstchars.js'
-import { buildScanner, scanEnd, DEFER } from './scan.js'
+import { buildScanner, mayContainNewline, scanEnd, DEFER } from './scan.js'
 import { LexError } from './state.js'
 
 /**
@@ -159,10 +159,14 @@ export function createLexer (defs, options = {}) {
       modes: modesOf(def),
       pushMode: def.pushMode ? idOf(def.pushMode) : -1,
       popMode: !!def.popMode,
+      // Whether the token's text can contain a line feed; set below, once its scanner is known. A token that
+      // cannot skips the newline count in `full` mode.
+      mayNewline: true,
       // Set only on the stand-in `fuse` builds for a run of regexes; see there.
       members: null
     }
   })
+  for (const c of compiled) c.mayNewline = mayContainNewline(c)
 
   const byName = new Map(compiled.map((c) => [c.name, c]))
   // Resolve longerAlt names to the compiled definitions once, up front.
@@ -245,6 +249,7 @@ export function createLexer (defs, options = {}) {
         modes: run[0].modes,
         pushMode: -1,
         popMode: false,
+        mayNewline: true,
         members: run
       })
       i = j
@@ -440,7 +445,7 @@ export function createLexer (defs, options = {}) {
         // freshly-lexed tokens *sixty times slower* (6.8 ms -> 361 ms),
         // reproducibly, for reasons that did not survive investigation. Do not
         // "optimize" this without measuring the full pipeline.
-        if (trackLines) {
+        if (trackLines && winner.mayNewline) {
           for (let j = offset; j < end; j++) {
             if (text.charCodeAt(j) !== 10) continue
             line++
@@ -590,7 +595,7 @@ export function createLexer (defs, options = {}) {
             : { type: winner.name, id: winner.id, image, start: offset, end })
         }
 
-        if (trackLines) {
+        if (trackLines && winner.mayNewline) {
           for (let j = offset; j < end; j++) {
             if (text.charCodeAt(j) !== 10) continue
             line++

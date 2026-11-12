@@ -9,6 +9,7 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { createLexer } from '../src/lexer.js'
 import { generateLexer } from '../src/lexgen.js'
 import { LexError } from '../src/state.js'
+import { buildScanner, SCANNER_KINDS } from '../src/scan.js'
 import { emitModule, parseDefinition } from '../src/index.js'
 import { grammar as json } from '../examples/json.js'
 
@@ -192,6 +193,72 @@ describe('a generated lexer is the createLexer lexer', () => {
 
   it('rejects a non-string, as the engine does', () => {
     expect(() => generate(kitchenSink, {}).tokenize(42)).toThrow(TypeError)
+  })
+})
+
+describe('newline tracking', () => {
+  // In `full` mode the lexer counts line feeds inside each token it produces. A token that provably
+  // cannot hold one skips that pass, which on JSON-like input is a large share of the lexing time. The
+  // proof has to be exact in one direction: wrongly skipping a token that does hold a newline makes
+  // every later line and column wrong. Each case below has a token that holds a newline in a way a
+  // careless analysis would miss, followed by a token whose position gives the miscount away.
+
+  const following = t('Mark', '@')
+  const cases = [
+    { name: 'a LINE token whose stop set lacks the line feed', pattern: '#[^@]*', kind: SCANNER_KINDS.LINE, input: '#a\nb@' },
+    { name: 'a LINE token that stops at the line feed', pattern: '#[^\\n]*', kind: SCANNER_KINDS.LINE, input: '#a\n@', skipped: true },
+    { name: 'a STRING that does not reject control characters', pattern: '"(?:[^"\\\\]|\\\\(?:["\\\\/bfnrt]))*"', kind: SCANNER_KINDS.STRING, input: '"a\nb"@' },
+    { name: 'a STRING whose escape set holds a line feed', pattern: '"(?:[^"\\\\\\u0000-\\u001f]|\\\\(?:["\\\\\\n]))*"', kind: SCANNER_KINDS.STRING, input: '"a\\\nb"@' },
+    { name: 'a STRING that rejects control characters, and so cannot hold one', pattern: '"(?:[^"\\\\\\u0000-\\u001f]|\\\\(?:["\\\\/bfnrt]))*"', kind: SCANNER_KINDS.STRING, input: '"a\\nb"@\n@', skipped: true },
+    { name: 'a STRING where a backslash may precede anything', pattern: '"(?:[^"\\\\]|\\\\.)*"', kind: SCANNER_KINDS.STRING, input: '"a\nb"@' },
+    { name: 'a QUOTED token', pattern: "'(?:''|[^'])*'", kind: SCANNER_KINDS.QUOTED, input: "'a\nb'@" },
+    { name: 'a CLASS that includes the line feed', pattern: '[a\\n]+', kind: SCANNER_KINDS.CLASS, input: 'a\na\n@' },
+    { name: 'a CLASS written as \\s', pattern: '\\s+', kind: SCANNER_KINDS.CLASS, input: ' \n \n@' },
+    { name: 'a CLASS without it', pattern: '[a-z]+', kind: SCANNER_KINDS.CLASS, input: 'ab\n@', skipped: true, split: true },
+    { name: 'a SEQ2 whose second class includes it', pattern: '[a-c]+[x\\n]+', kind: SCANNER_KINDS.SEQ2, input: 'abx\n\n@' },
+    { name: 'a NUMBER', pattern: '\\d+(?:\\.\\d+)?', kind: SCANNER_KINDS.NUMBER, input: '12.5\n@', skipped: true, split: true },
+    { name: 'a KEYWORD', pattern: 'select(?![a-z])', kind: SCANNER_KINDS.KEYWORD, input: 'select\n@', skipped: true, split: true },
+    { name: 'a regex that no scanner covers', pattern: 'x(?:a|\\n)+', kind: null, input: 'xa\n\na@' },
+    { name: 'a literal containing one', literal: 'a\nb', kind: null, input: 'a\nb@' },
+    { name: 'a literal without one', literal: 'ab', kind: null, input: 'ab\n@', skipped: true, split: true }
+  ]
+
+  const ws = t('Nl', '\\n', { skip: true })
+
+  for (const c of cases) {
+    it(c.name, () => {
+      const def = c.literal !== undefined ? { name: 'Tok', literal: c.literal } : t('Tok', c.pattern)
+      if (c.kind !== null) {
+        // The case is only meaningful if the scanner it names is the one that was built.
+        const scanner = buildScanner(def.pattern, false)
+        expect(scanner && scanner.kind, `${def.pattern} should be recognized`).toBe(c.kind)
+      }
+      const tokens = [def, following, ws, t('Rest', '[a-z]+')]
+      const generated = generate(tokens, { positions: 'full' })
+      const engine = createLexer(tokens, { positions: 'full' })
+      expect(outcome(generated, c.input)).toBe(outcome(engine, c.input))
+      // And the positions are what a person would count, not merely what the engine says.
+      const marks = generated.tokenize(c.input).filter((tok) => tok.type === 'Mark')
+      const expectedLine = 1 + (c.input.slice(0, c.input.indexOf('@')).match(/\n/g) || []).length
+      expect(marks[0].line).toBe(expectedLine)
+      // The table records the verdict.
+      const nl = /const NL = (\[[01,]*\])/.exec(generateLexer(tokens, { positions: 'full' }))
+      expect(JSON.parse(nl[1])[0]).toBe(c.skipped ? 0 : 1)
+    })
+  }
+
+  it('does not write the table at all in offset mode, where nothing is counted', () => {
+    expect(generateLexer(kitchenSink, { positions: 'offset' })).not.toContain('const NL')
+    expect(generateLexer(kitchenSink, { positions: 'full' })).toContain('const NL')
+  })
+
+  it('counts a line feed in the token a longerAlt hands the match to', () => {
+    // `if` cannot hold a newline but the word it defers to can (here, by being a token that can)
+    const tokens = [{ name: 'If', literal: 'if', longerAlt: 'Long' }, t('Long', '[a-z\\n]+'), following]
+    const generated = generate(tokens, { positions: 'full' })
+    const engine = createLexer(tokens, { positions: 'full' })
+    for (const input of ['if@', 'iff\n\nx@', 'if\n@']) expect(outcome(generated, input), input).toBe(outcome(engine, input))
+    expect(generated.tokenize('iff\n\nx@').find((tok) => tok.type === 'Mark').line).toBe(3)
   })
 })
 

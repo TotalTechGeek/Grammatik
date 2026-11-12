@@ -499,6 +499,256 @@ function computeFirsts (grammar) {
   return ruleFirsts
 }
 
+
+// ---------------------------------------------------------------------------
+// Two-token lookahead
+//
+// FIRST sets say which token can begin a branch. `buildDispatch` uses them to
+// pick a branch in O(1), and where several branches can begin with the same
+// token it falls back to trying them in order. Often a *second* token tells
+// them apart: `Identifier (` is a function call, `Identifier .` a reference
+// path, and a branch that needs `(` next need not be attempted when `.` is.
+// FIRST_2 is the standard extension: the set of 1- and 2-token prefixes a
+// node can begin with.
+// ---------------------------------------------------------------------------
+
+/**
+ * @typedef {object} First2
+ * @property {Set<string>} seqs  Prefixes of the tokens a match can begin with: `a` for a derivation that
+ *                               ends after one token (what follows is not known here, so it is a wildcard
+ *                               for the second token), `a\u0001b` for two or more.
+ * @property {boolean} eps       Whether the node can match consuming nothing.
+ * @property {boolean} unknown   Whether analysis could not see through the node. Anything unknown
+ *                               disables pruning; a wrong guess here would skip a branch that matches.
+ */
+
+const SEP2 = '\u0001'
+/**
+ * In the second position: any token at all. It marks a prefix that is known only up to its first token
+ * and continues in ways this analysis does not model (an operator, a separator, a suffix). That is not the
+ * same as a derivation that simply ends after one token, whose continuation is whatever the enclosing
+ * sequence puts next — `concat2` appends the next element to the latter and must not to the former.
+ */
+const ANY2 = '\u0002'
+
+/** @returns {First2} */
+const emptyFirst2 = () => ({ seqs: new Set(), eps: false, unknown: false })
+/** @returns {First2} */
+const epsilon2 = () => ({ seqs: new Set(), eps: true, unknown: false })
+/** @returns {First2} */
+const opaque2 = () => ({ seqs: new Set(), eps: true, unknown: true })
+
+/** `x` followed by `y`, cut to two tokens. */
+function concat2 (x, y) {
+  const out = emptyFirst2()
+  out.eps = x.eps && y.eps
+  out.unknown = x.unknown || y.unknown
+  for (const a of x.seqs) {
+    if (a.includes(SEP2)) { out.seqs.add(a); continue }
+    if (y.eps) out.seqs.add(a)
+    for (const b of y.seqs) out.seqs.add(a + SEP2 + (b.includes(SEP2) ? b.slice(0, b.indexOf(SEP2)) : b))
+  }
+  if (x.eps) for (const b of y.seqs) out.seqs.add(b)
+  return out
+}
+
+/** Union of alternatives. */
+function union2 (...parts) {
+  const out = emptyFirst2()
+  for (const part of parts) {
+    for (const a of part.seqs) out.seqs.add(a)
+    if (part.eps) out.eps = true
+    if (part.unknown) out.unknown = true
+  }
+  return out
+}
+
+/** `inner`, followed by something unmodeled: every prefix that stops at one token becomes `token, anything`. */
+function open2 (inner) {
+  const seqs = new Set()
+  for (const a of inner.seqs) seqs.add(a.includes(SEP2) ? a : a + SEP2 + ANY2)
+  return { seqs, eps: inner.eps, unknown: inner.unknown || inner.eps }
+}
+
+/** `inner` zero or more times. A repetition's third and later tokens never matter at depth two. */
+function star2 (inner) {
+  const out = union2(epsilon2(), inner, concat2(inner, inner))
+  if (inner.eps) out.unknown = true // a repeated parser that can match nothing is a grammar error elsewhere
+  return out
+}
+
+/**
+ * FIRST_2 of a node, given the current per-rule estimates. Mirrors `firstOf`, case for case.
+ * Where a construct is followed by tokens this function does not model (a separator, an operator,
+ * a suffix), its one-token derivations stay one token long, which makes the second token a wildcard.
+ *
+ * @param {*} node
+ * @param {Map<string, First2>} rules
+ * @returns {First2}
+ */
+function firstOf2 (node, rules) {
+  const op = opOf(node)
+  if (op === null) return opaque2()
+  const arg = node[op]
+
+  switch (op) {
+    case 'consume': {
+      const name = Array.isArray(arg) ? arg[0] : arg
+      const out = emptyFirst2()
+      if (typeof name === 'string') out.seqs.add(name)
+      else out.unknown = true
+      return out
+    }
+    case 'epsilon':
+    case 'action':
+      return epsilon2()
+    case 'text':
+      return firstOf2(arg, rules)
+    case 'label':
+      return Array.isArray(arg) ? firstOf2(arg[1], rules) : opaque2()
+    case 'seq': {
+      if (!Array.isArray(arg)) return opaque2()
+      let out = epsilon2()
+      for (const child of arg) out = concat2(out, firstOf2(child, rules))
+      return out
+    }
+    case 'alt': {
+      if (!Array.isArray(arg)) return opaque2()
+      return union2(emptyFirst2(), ...arg.map((child) => firstOf2(child, rules)))
+    }
+    case 'many':
+    case 'option':
+    case 'flag': {
+      const inner = firstOf2(arg, rules)
+      return op === 'many' ? star2(inner) : union2(epsilon2(), inner)
+    }
+    case 'many1': {
+      const inner = firstOf2(arg, rules)
+      return concat2(inner, star2(inner))
+    }
+    case 'oneOf': {
+      const out = emptyFirst2()
+      for (const name of Array.isArray(arg) ? arg : [arg]) {
+        if (typeof name === 'string') out.seqs.add(name)
+        else out.unknown = true
+      }
+      return out
+    }
+    case 'as':
+      return firstOf2(Array.isArray(arg) ? arg[0] : arg && arg.parser, rules)
+    case 'between':
+      return firstOf2({ seq: [arg && arg.open, arg && arg.body, arg && arg.close] }, rules)
+    case 'pick':
+    case 'yields':
+      return firstOf2({ seq: arg && Array.isArray(arg.parsers) ? arg.parsers : [] }, rules)
+    case 'prefix': {
+      // operator* operand
+      const operator = firstOf2(arg && arg.operator, rules)
+      const operand = firstOf2(arg && arg.operand, rules)
+      return concat2(star2(operator), operand)
+    }
+    case 'postfix':
+    case 'infixLeft':
+    case 'infixRight': {
+      // operand (suffix | operator operand)*: only the operand's own prefixes are listed, and one that
+      // stops at a single token may be followed by an operator or suffix, so its second token is open.
+      return open2(firstOf2(arg && arg.operand, rules))
+    }
+    case 'manySep':
+    case 'many1Sep': {
+      const inner = open2(firstOf2(arg && arg.rule, rules))
+      return { seqs: inner.seqs, eps: op === 'manySep' || inner.eps, unknown: inner.unknown }
+    }
+    case 'subrule': {
+      const name = Array.isArray(arg) ? arg[0] : arg
+      const known = rules.get(name)
+      if (!known) return opaque2()
+      return { seqs: known.seqs, eps: known.eps, unknown: known.unknown }
+    }
+    case 'eof':
+    case 'lookahead':
+    case 'negLookahead':
+      return opaque2()
+    default:
+      return epsilon2() // a value expression: touches no tokens
+  }
+}
+
+/**
+ * FIRST_2 of every rule, by a fixpoint over the grammar so recursive rules converge.
+ * @param {Record<string, any>} grammar
+ * @returns {Map<string, First2>}
+ */
+function computeFirsts2 (grammar) {
+  /** @type {Map<string, First2>} */
+  const rules = new Map()
+  for (const name of Object.keys(grammar)) rules.set(name, emptyFirst2())
+  for (let changed = true; changed;) {
+    changed = false
+    for (const name of Object.keys(grammar)) {
+      const current = rules.get(name)
+      const computed = firstOf2(grammar[name], rules)
+      for (const a of computed.seqs) if (!current.seqs.has(a)) { current.seqs.add(a); changed = true }
+      if (computed.eps && !current.eps) { current.eps = true; changed = true }
+      if (computed.unknown && !current.unknown) { current.unknown = true; changed = true }
+    }
+  }
+  return rules
+}
+
+/**
+ * For a group of branches that all begin with one of `firstTokens`, which of them can still match once the
+ * *second* token is known? Returns null when that cannot be answered soundly (a branch is unknown or can
+ * match nothing at all) or when it would not narrow anything.
+ *
+ * A branch's bit is set for a second token when some prefix it can begin with is `first second`, or when
+ * one of its prefixes ends after the first token (what follows is not known, so it stays a candidate).
+ *
+ * @param {any[]} branches      The group, in `alt` order.
+ * @param {Map<string, First2>} firsts2
+ * @param {Iterable<string>} firstTokens  The tokens this group is reached on.
+ * @returns {{ bySecond: Map<string, number>, other: number, full: number } | null}
+ */
+export function secondTokenMasks (branches, firsts2, firstTokens) {
+  if (branches.length < 2 || branches.length > 30) return null
+  const firstSet = new Set(firstTokens)
+  /** @type {Array<{ any: boolean, seconds: Set<string> }>} */
+  const perBranch = []
+  for (const branch of branches) {
+    const f = firstOf2(branch, firsts2)
+    if (f.unknown || f.eps || f.seqs.size === 0) return null
+    const info = { any: false, seconds: new Set() }
+    for (const seq of f.seqs) {
+      const cut = seq.indexOf(SEP2)
+      const first = cut === -1 ? seq : seq.slice(0, cut)
+      if (!firstSet.has(first)) continue
+      const second = cut === -1 ? null : seq.slice(cut + 1)
+      // Ends after one token (what follows is unknown here) or is open-ended: either way any second token fits.
+      if (second === null || second === ANY2) info.any = true
+      else info.seconds.add(second)
+    }
+    if (!info.any && info.seconds.size === 0) return null // in the group but starts with none of its tokens: do not guess
+    perBranch.push(info)
+  }
+
+  const full = (1 << branches.length) - 1
+  const named = new Set()
+  for (const info of perBranch) for (const second of info.seconds) named.add(second)
+
+  let other = 0
+  perBranch.forEach((info, i) => { if (info.any) other |= 1 << i })
+  const bySecond = new Map()
+  for (const second of named) {
+    let mask = 0
+    perBranch.forEach((info, i) => { if (info.any || info.seconds.has(second)) mask |= 1 << i })
+    bySecond.set(second, mask)
+  }
+
+  // Worth emitting only if some second token rules out some branch.
+  const narrows = other !== full || [...bySecond.values()].some((mask) => mask !== full)
+  return narrows ? { bySecond, other, full } : null
+}
+
 /**
  * Collects the rules a node can invoke without having consumed anything first.
  * Used to find left recursion.
@@ -715,7 +965,7 @@ function validateNode (node, grammar, tokenNames, errors, path) {
 /**
  * @param {Record<string, any>} grammar
  * @param {{ tokenNames?: string[] }} [options]
- * @returns {{ firsts: Map<string, First>, errors: string[], leftRecursive: string[] }}
+ * @returns {{ firsts: Map<string, First>, firsts2: Map<string, First2>, errors: string[], leftRecursive: string[] }}
  */
 export function analyze (grammar, options = {}) {
   const errors = []
@@ -726,6 +976,7 @@ export function analyze (grammar, options = {}) {
   }
 
   const firsts = computeFirsts(grammar)
+  const firsts2 = computeFirsts2(grammar)
 
   // A rule is left-recursive when it can reach itself without consuming a token.
   const leftEdges = new Map()
@@ -755,7 +1006,7 @@ export function analyze (grammar, options = {}) {
     errors.push(`rule '${name}' is left-recursive; this parser is LL-style and would not terminate. Rewrite it with 'many'/'many1Sep' (the standard left-recursion elimination).`)
   }
 
-  return { firsts, errors, leftRecursive }
+  return { firsts, firsts2, errors, leftRecursive }
 }
 
 /**

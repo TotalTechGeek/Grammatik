@@ -93,6 +93,13 @@ export interface ParserOptions {
    * they are equivalent to. Default `true`; `false` runs the grammar exactly as written.
    */
   idioms?: boolean
+  /**
+   * Where several `alt` branches can begin with the same token, let the *second* token
+   * rule some of them out before any is tried (`Identifier (` can be a call, `Identifier .`
+   * cannot). Only generated code, and only on the first, untracked pass, so error messages
+   * are unchanged. Default `true`; `false` tries the colliding branches in order.
+   */
+  lookahead?: boolean
   /** Require the whole token stream to be consumed. */
   strict?: boolean
   /** FIRST-set dispatch for `alt`. Off forces ordered backtracking. */

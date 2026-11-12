@@ -2,7 +2,7 @@
 'use strict'
 
 import { FAIL, expect } from './state.js'
-import { buildDispatch, opOf, recognizeSeqIdiom, recognizeAltPrefixIdiom, recognizeAltConsumeIdiom } from './analyze.js'
+import { buildDispatch, secondTokenMasks, opOf, recognizeSeqIdiom, recognizeAltPrefixIdiom, recognizeAltConsumeIdiom } from './analyze.js'
 
 /**
  * A real source generator for grammars.
@@ -24,10 +24,11 @@ import { buildDispatch, opOf, recognizeSeqIdiom, recognizeAltPrefixIdiom, recogn
 /**
  * @param {{ planner: any, rules: Record<string, any>, firsts: Map<string, any>|null,
  *           memo: boolean, maxSteps: number, tokenIds?: Map<string, number>|null,
- *           memoSlots?: Map<string, number>, inlineRules?: boolean, idioms?: boolean }} config
+ *           memoSlots?: Map<string, number>, inlineRules?: boolean, idioms?: boolean,
+ *           firsts2?: Map<string, any>|null, lookahead?: boolean }} config
  */
 export function createCodegen (config) {
-  const { planner, rules, firsts, memo, maxSteps, tokenIds = null, memoSlots = new Map(), inlineRules = true, idioms = true } = config
+  const { planner, rules, firsts, memo, maxSteps, tokenIds = null, memoSlots = new Map(), inlineRules = true, idioms = true, firsts2 = null, lookahead = true } = config
 
   /**
    * `token.id === <n>` is an integer compare instead of a string compare, and
@@ -686,6 +687,57 @@ export function createCodegen (config) {
     return result
   }
 
+  /**
+   * `genOrderedBacktrack`, for a group of branches that all begin with the same token, when the token after
+   * that one rules some of them out (`Identifier (` can be a call, `Identifier .` cannot be a plain
+   * reference). Each branch is still emitted once; a bitmask picked by a switch on the second token says
+   * which to try. Order is kept, so the first branch that matches still wins, and a branch is skipped only
+   * when the analysis proves it cannot match.
+   *
+   * Only while not tracking: the tracking re-run is what builds error messages, and it needs every branch
+   * to record what it expected. A parse that fails untracked is re-run tracked, so errors are unchanged.
+   *
+   * @param {any[]} list
+   * @param {{ bySecond: Map<string, number>, other: number, full: number }} masks
+   */
+  function genMaskedBacktrack (list, masks, out, bindingsVar) {
+    const result = nextId()
+    const label = 'L' + nextId()
+    const start = nextId()
+    const mask = nextId()
+    const second = nextId()
+    const ids = tokenIds ? [...masks.bySecond.keys()].map((t) => tokenIds.get(t)) : null
+    const numeric = ids !== null && ids.every((id) => id !== undefined)
+
+    // Equal masks share a case, so the switch has one arm per distinct outcome.
+    const byMask = new Map()
+    for (const [token, m] of masks.bySecond) {
+      if (!byMask.has(m)) byMask.set(m, [])
+      byMask.get(m).push(numeric ? tokenIds.get(token) : JSON.stringify(token))
+    }
+    const arms = [...byMask].map(([m, labels]) => `${labels.map((l) => `case ${l}:`).join(' ')} ${mask} = ${m}; break;`)
+
+    out.push(`let ${result};`, `${label}: {`, `const ${start} = c.idx;`, `let ${mask} = ${masks.full};`)
+    out.push(
+      'if (!c.track) {',
+      `const ${second} = c.tokens[${start} + 1];`,
+      numeric
+        ? `switch (${second} === undefined ? -1 : (${second}.id !== undefined ? ${second}.id : I[${second}.type])) {`
+        : `switch (${second} === undefined ? '' : ${second}.type) {`,
+      ...arms,
+      `default: ${mask} = ${masks.other}; break;`,
+      '}',
+      '}'
+    )
+    list.forEach((branch, i) => {
+      out.push(`if (${mask} & ${1 << i}) {`)
+      const value = gen(branch, out, bindingsVar)
+      out.push(`if (${value} !== F) { ${result} = ${value}; break ${label}; }`, `c.idx = ${start};`, '}')
+    })
+    out.push(`${result} = F;`, '}')
+    return result
+  }
+
   function genAlt (branches, out, result, bindingsVar) {
     if (!Array.isArray(branches)) throw new Error("'alt' expects an array of branches")
 
@@ -737,7 +789,13 @@ export function createCodegen (config) {
       const caseLabel = (t) => numeric ? tokenIds.get(t) : JSON.stringify(t)
       for (const [branch, tokenNames] of byBranch) {
         out.push(tokenNames.map((t) => `case ${caseLabel(t)}:`).join(' ') + ' {')
-        const value = Array.isArray(branch) ? genOrderedBacktrack(branch, out, bindingsVar) : gen(branch, out, bindingsVar)
+        let value
+        if (Array.isArray(branch)) {
+          const masks = lookahead && firsts2 ? secondTokenMasks(branch, firsts2, tokenNames) : null
+          value = masks ? genMaskedBacktrack(branch, masks, out, bindingsVar) : genOrderedBacktrack(branch, out, bindingsVar)
+        } else {
+          value = gen(branch, out, bindingsVar)
+        }
         out.push(`${result} = ${value}; break ${label};`, '}')
       }
       out.push(

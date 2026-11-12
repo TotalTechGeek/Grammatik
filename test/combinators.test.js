@@ -387,8 +387,10 @@ describe('parser options', () => {
     expect(memoized.parse('7').image).toBe('7')
 
     // `autoMemo` would rescue this grammar on its own (both branches start with
-    // the same rule), so it is switched off to show what memoization is for.
-    const plain = createParser(spec, { autoMemo: false, maxSteps: 100000 })
+    // the same rule), and so would two tokens of lookahead (no `;` follows, so the
+    // branch that needs one is never tried); both are switched off to show what
+    // memoization is for.
+    const plain = createParser(spec, { autoMemo: false, lookahead: false, maxSteps: 100000 })
     expect(() => plain.parse('7')).toThrow(/maxSteps/)
 
     expect(createParser(spec, { maxSteps: 100000 }).parse('7').image).toBe('7')

@@ -2,7 +2,7 @@
 'use strict'
 
 import { FAIL, expect } from './state.js'
-import { buildDispatch, secondTokenMasks, firstOf, opOf, recognizeSeqIdiom, recognizeAltPrefixIdiom, recognizeAltConsumeIdiom } from './analyze.js'
+import { buildDispatch, secondTokenMasks, recognizeAltFactoring, firstOf, opOf, recognizeSeqIdiom, recognizeAltPrefixIdiom, recognizeAltConsumeIdiom } from './analyze.js'
 
 /**
  * A real source generator for grammars.
@@ -25,10 +25,10 @@ import { buildDispatch, secondTokenMasks, firstOf, opOf, recognizeSeqIdiom, reco
  * @param {{ planner: any, rules: Record<string, any>, firsts: Map<string, any>|null,
  *           memo: boolean, maxSteps: number, tokenIds?: Map<string, number>|null,
  *           memoSlots?: Map<string, number>, inlineRules?: boolean, idioms?: boolean,
- *           firsts2?: Map<string, any>|null, lookahead?: boolean, precedence?: boolean }} config
+ *           firsts2?: Map<string, any>|null, lookahead?: boolean, precedence?: boolean, factoring?: boolean }} config
  */
 export function createCodegen (config) {
-  const { planner, rules, firsts, memo, maxSteps, tokenIds = null, memoSlots = new Map(), inlineRules = true, idioms = true, firsts2 = null, lookahead = true, precedence = true } = config
+  const { planner, rules, firsts, memo, maxSteps, tokenIds = null, memoSlots = new Map(), inlineRules = true, idioms = true, firsts2 = null, lookahead = true, precedence = true, factoring = true } = config
 
   /**
    * `token.id === <n>` is an integer compare instead of a string compare, and
@@ -631,11 +631,12 @@ export function createCodegen (config) {
     }
   }
 
-  function genSeq (children, out, result) {
+  function genSeq (children, out, result, preset = null) {
     if (!Array.isArray(children)) throw new Error("'seq' expects an array of parsers")
 
-    // Same idiom recognition as the planner, so both paths agree.
-    const idiom = idioms ? recognizeSeqIdiom(children) : null
+    // Same idiom recognition as the planner, so both paths agree. Not when the bindings already hold
+    // values from before the first child: an idiom would rewrite the tail without them.
+    const idiom = idioms && preset === null ? recognizeSeqIdiom(children) : null
     if (idiom !== null) return gen(idiom, out, null)
 
     let hasLabels = false
@@ -645,7 +646,7 @@ export function createCodegen (config) {
       if (childOp === 'label') hasLabels = true
       else if (childOp === 'action') hasAction = true
     }
-    const needsScope = hasLabels || hasAction
+    const needsScope = hasLabels || hasAction || preset !== null
 
     const start = nextId()
     const label = 'L' + nextId()
@@ -655,7 +656,8 @@ export function createCodegen (config) {
 
     out.push(tickSrc, `let ${result};`, `${label}: {`, `const ${start} = c.idx;`)
     if (needsScope) {
-      out.push(`const ${saved} = c.bindings;`, `const ${bindingsVar} = {};`, `c.bindings = ${bindingsVar};`)
+      const initial = preset === null ? '{}' : `{ ${preset.map(([name, value]) => `${JSON.stringify(name)}: ${value}`).join(', ')} }`
+      out.push(`const ${saved} = c.bindings;`, `const ${bindingsVar} = ${initial};`, `c.bindings = ${bindingsVar};`)
     }
 
     let actionResult = null
@@ -750,7 +752,109 @@ export function createCodegen (config) {
     return result
   }
 
+  /**
+   * An `alt` whose branches all begin with the same parsers (see `recognizeAltFactoring`): parse that once,
+   * then try what each branch does after it, in order. A branch that is just the shared parser returns its value.
+   *
+   * Each attempt starts with a bindings object holding the prefix's labels and nothing else, as the branch
+   * would have had running alone, so a label set by an attempt that failed cannot reach a later action. Which
+   * attempts are worth making is narrowed by the next token: one whose first token cannot be it is skipped.
+   *
+   * @param {{ prefix: any[], branches: Array<{ rest: any[] } | { bare: true }> }} plan
+   */
+  function genFactoredAlt (plan, out) {
+    const result = nextId()
+    const label = 'L' + nextId()
+    const start = nextId()
+    out.push(tickSrc, `let ${result};`, `${label}: {`, `const ${start} = c.idx;`)
+
+    const preset = []
+    let shared = null
+    for (const child of plan.prefix) {
+      const isLabel = opOf(child) === 'label'
+      const value = gen(isLabel ? child.label[1] : child, out, null)
+      out.push(`if (${value} === F) { c.idx = ${start}; ${result} = F; break ${label}; }`)
+      if (isLabel) preset.push([child.label[0], value])
+      shared = value
+    }
+
+    // Which branches can begin with the next token. A branch we cannot see through is always a candidate.
+    const reachable = []
+    for (const branch of plan.branches) {
+      reachable.push(branch)
+      if (branch.bare) break // always succeeds once the prefix has: whatever follows it is never reached
+    }
+    const after = nextId()
+    out.push(`const ${after} = c.idx;`)
+
+    let mask = null
+    const candidates = reachable.map((branch) => {
+      if (branch.bare || !firsts || !tokenIds) return null
+      const first = firstOf({ seq: branch.rest }, firsts)
+      return first.unknown || first.nullable || first.tokens.size === 0 ? null : first.tokens
+    })
+    const ids = candidates.map((tokens) => tokens === null ? null : [...tokens].map((t) => tokenIds.get(t)))
+    if (reachable.length <= 30 && ids.some((list) => list !== null) && ids.every((list) => list === null || list.every((id) => id !== undefined))) {
+      mask = nextId()
+      const next = nextId()
+      const byToken = new Map()
+      let always = 0
+      reachable.forEach((_, i) => {
+        if (ids[i] === null) { always |= 1 << i; return }
+        for (const id of ids[i]) byToken.set(id, (byToken.get(id) || 0) | (1 << i))
+      })
+      const byMask = new Map()
+      for (const [id, bits] of byToken) {
+        const m = bits | always
+        if (!byMask.has(m)) byMask.set(m, [])
+        byMask.get(m).push(id)
+      }
+      out.push(
+        `let ${mask} = ${always};`,
+        `const ${next} = c.tokens[${after}];`,
+        `if (${next} !== undefined) {`,
+        `switch (${next}.id !== undefined ? ${next}.id : I[${next}.type]) {`,
+        ...[...byMask].map(([m, list]) => `${list.map((id) => `case ${id}:`).join(' ')} ${mask} = ${m}; break;`),
+        '}',
+        '}'
+      )
+    }
+
+    reachable.forEach((branch, i) => {
+      if (branch.bare) {
+        out.push(`${result} = ${shared}; break ${label};`)
+        return
+      }
+      const attempt = nextId()
+      if (mask !== null) out.push(`if (${mask} & ${1 << i}) {`); else out.push('{')
+      genSeq(branch.rest, out, attempt, preset)
+      out.push(`if (${attempt} !== F) { ${result} = ${attempt}; break ${label}; }`, '}') // a failed `seq` has already put the cursor back where it began
+    })
+    out.push(`${result} = F; c.idx = ${start};`, '}')
+    return result
+  }
+
   function genAlt (branches, out, result, bindingsVar) {
+    if (!Array.isArray(branches)) throw new Error("'alt' expects an array of branches")
+
+    // Branches that begin with the same parsers parse them once. The first pass only: the tracked re-run that
+    // builds an error message runs the alt as written, so a failure still names the rules it went through.
+    if (factoring && bindingsVar === null && firsts && !(idioms && (recognizeAltConsumeIdiom(branches) || recognizeAltPrefixIdiom(branches)))) {
+      const plan = recognizeAltFactoring(branches, rules)
+      if (plan !== null) {
+        const merged = nextId()
+        out.push(`let ${merged};`, 'if (c.track) {')
+        const plain = genAltPlain(branches, out, result, bindingsVar)
+        out.push(`${merged} = ${plain};`, '} else {')
+        const fast = genFactoredAlt(plan, out)
+        out.push(`${merged} = ${fast};`, '}')
+        return merged
+      }
+    }
+    return genAltPlain(branches, out, result, bindingsVar)
+  }
+
+  function genAltPlain (branches, out, result, bindingsVar) {
     if (!Array.isArray(branches)) throw new Error("'alt' expects an array of branches")
 
     const oneOf = idioms ? recognizeAltConsumeIdiom(branches) : null

@@ -17,8 +17,10 @@ import { usesOuterScope } from './plan.js'
  * parses that `Additive` again for each branch it tries, and since an
  * `Additive` can contain a parenthesised `Predicate`, the repetition compounds
  * at every level of nesting: about 6x per level in the SQL example, 255 ms for
- * seven nested parentheses. Left-factoring cannot help when the shared prefix is
- * labelled or sits behind a rule boundary, as here.
+ * seven nested parentheses. Generated code now parses a shared prefix like this
+ * one once (see `recognizeAltFactoring`), but only on the first, untracked pass:
+ * the tracked re-run that builds an error message runs the `alt` as written, and
+ * there the repetition is back, so the memo is still what keeps it from compounding.
  *
  * Remembering the shared rule's result per position makes every branch after the
  * first a lookup. Only that rule needs it — global memoization costs about 2x on

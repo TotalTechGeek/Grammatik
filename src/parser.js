@@ -47,6 +47,10 @@ import { FAIL, createState, buildParseError, ParseError } from './state.js'
  *                                       level, as a single precedence-climbing function instead of a
  *                                       call per level per operand. Generated code only, and only
  *                                       while not tracking errors, so messages are unchanged.
+ * @property {boolean} [factoring=true] Where every branch of an `alt` begins by parsing the same thing,
+ *                                       parse it once and try what each branch does after it. Generated
+ *                                       code only, and only while not tracking errors, so messages are
+ *                                       unchanged. Off runs the branches one after another.
  * @property {boolean} [strict=true]     Require the whole token stream to be consumed.
  * @property {boolean} [validate=true]   Throw on grammar errors (left recursion, bad refs).
  * @property {number} [maxSteps=0]       Runaway guard; 0 disables.
@@ -104,6 +108,7 @@ export function createParser (spec, options = {}) {
     idioms = true,
     lookahead = true,
     precedence = true,
+    factoring = true,
     strict = true,
     validate = true,
     maxSteps = 0,
@@ -168,7 +173,7 @@ export function createParser (spec, options = {}) {
   // lands on the generated code rather than a method dispatch.
   // Code generation needs `new Function`, so it is off whenever eval is.
   const codegen = compile && unsafeEval
-    ? createCodegen({ planner, rules, firsts, firsts2: ll1 ? analysis.firsts2 : null, lookahead, precedence, memo, maxSteps, tokenIds, memoSlots, inlineRules, idioms })
+    ? createCodegen({ planner, rules, firsts, firsts2: ll1 ? analysis.firsts2 : null, lookahead, precedence, factoring, memo, maxSteps, tokenIds, memoSlots, inlineRules, idioms })
     : null
   const compiledStart = codegen && codegen.compile(start)
 

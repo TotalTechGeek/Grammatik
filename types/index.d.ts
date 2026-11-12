@@ -108,6 +108,13 @@ export interface ParserOptions {
    * so error messages are unchanged. Default `true`.
    */
   precedence?: boolean
+  /**
+   * Where every branch of an `alt` begins by parsing the same thing (`Comparison`, `In`,
+   * `Between` ... each starting `label(left, Additive)`), parse it once and try what each
+   * branch does after it, in order. Generated code only, and only on the first, untracked
+   * pass, so error messages are unchanged. Default `true`.
+   */
+  factoring?: boolean
   /** Require the whole token stream to be consumed. */
   strict?: boolean
   /** FIRST-set dispatch for `alt`. Off forces ordered backtracking. */

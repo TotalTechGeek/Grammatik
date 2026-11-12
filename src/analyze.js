@@ -216,6 +216,79 @@ function firstOf (node, ruleFirsts) {
 }
 
 /**
+ * Recognizes an `alt` whose branches all begin by parsing the same thing, so the shared part can be parsed once:
+ *
+ *   alt(subrule(Comparison), subrule(In), subrule(Between), subrule(Additive))
+ *   Comparison = seq(label(left, subrule(Additive)), label(op, ...), label(right, ...), action(...))
+ *   In         = seq(label(left, subrule(Additive)), option(consume(Not)), consume(In), ..., action(...))
+ *
+ * Every branch is a `seq` (written inline or reached through a `subrule` to a rule that is one) with the same
+ * leading parsers, or is exactly the parser the others begin with (`Additive` alone). Ordered choice over
+ * `P c1 | P c2 | P` is `P` followed by ordered choice over `c1 | c2 | (nothing)` when `P` gives the same result
+ * every time it runs at the same place, which a parser here does; and if `P` fails, every branch fails.
+ *
+ * `recognizeAltPrefixIdiom` does this for a prefix that is unlabelled and action-free. This is for the case
+ * the memoization planner's header calls out: a prefix that is labelled, or sits behind a rule boundary.
+ *
+ * The tails keep their own bindings, as if each branch had run alone: the caller starts each attempt with the
+ * prefix's labels and nothing else, so a label a failed attempt set cannot reach a later one's action. What
+ * this does need is that actions do not reach outside their own scope, and that each branch ends in an action.
+ *
+ * @param {any[]} branches
+ * @param {Record<string, any>} rules
+ * @returns {{ prefix: any[], branches: Array<{ rest: any[] } | { bare: true }> } | null}
+ */
+export function recognizeAltFactoring (branches, rules) {
+  if (!Array.isArray(branches) || branches.length < 2) return null
+
+  const resolved = []
+  for (const branch of branches) {
+    const op = opOf(branch)
+    if (op === 'seq' && Array.isArray(branch.seq)) { resolved.push({ children: branch.seq }); continue }
+    if (op === 'subrule') {
+      const name = Array.isArray(branch.subrule) ? branch.subrule[0] : branch.subrule
+      const body = typeof name === 'string' ? rules[name] : undefined
+      if (opOf(body) === 'seq' && Array.isArray(body.seq)) { resolved.push({ children: body.seq }); continue }
+    }
+    resolved.push({ bare: branch })
+  }
+
+  const seqs = resolved.filter((r) => r.children)
+  if (seqs.length < 2) return null
+
+  // The longest run of leading parsers they all share. At least one child is left over in each, for the action.
+  const first = seqs[0].children
+  let m = 0
+  while (
+    m < first.length - 1 &&
+    PARSER_OPS.has(opOf(first[m])) && opOf(first[m]) !== 'action' &&
+    seqs.every((r) => m < r.children.length - 1 && deepEqual(r.children[m], first[m]))
+  ) m++
+  if (m === 0) return null
+
+  // The names the prefix labels, and the parser a bare branch would have to be.
+  const prefix = first.slice(0, m)
+  const labelled = new Set(prefix.filter((c) => opOf(c) === 'label').map((c) => c.label[0]))
+  const alone = opOf(prefix[0]) === 'label' ? prefix[0].label[1] : prefix[0]
+
+  const out = []
+  for (const r of resolved) {
+    if (r.bare !== undefined) {
+      // A branch that is just the shared parser returns its value, which only a one-parser prefix has.
+      if (m !== 1 || !deepEqual(r.bare, alone)) return null
+      out.push({ bare: true })
+      continue
+    }
+    const rest = r.children.slice(m)
+    const action = rest[rest.length - 1]
+    if (opOf(action) !== 'action' || usesOuterScope(action.action)) return null
+    for (const child of rest) if (opOf(child) === 'label' && labelled.has(child.label[0])) return null
+    out.push({ rest })
+  }
+  return { prefix, branches: out }
+}
+
+/**
  * Rewrites a `seq` into a cheaper equivalent combinator when it matches a known
  * idiom, in the spirit of json-logic-engine's own `checkIdioms`.
  *

@@ -39,6 +39,10 @@ import { FAIL, createState, buildParseError, ParseError } from './state.js'
  *                                       branches) and run them as the
  *                                       cheaper combinator they are equivalent to. Off runs the
  *                                       grammar exactly as written; for debugging and benchmarking.
+ * @property {boolean} [lookahead=true] Where several `alt` branches can begin with the same token, let
+ *                                       the second token rule some of them out before any is tried.
+ *                                       Generated code only, and only while not tracking errors, so
+ *                                       messages are unchanged. Off tries them in order.
  * @property {boolean} [strict=true]     Require the whole token stream to be consumed.
  * @property {boolean} [validate=true]   Throw on grammar errors (left recursion, bad refs).
  * @property {number} [maxSteps=0]       Runaway guard; 0 disables.
@@ -94,6 +98,7 @@ export function createParser (spec, options = {}) {
     autoMemo = true,
     inlineRules = true,
     idioms = true,
+    lookahead = true,
     strict = true,
     validate = true,
     maxSteps = 0,
@@ -158,7 +163,7 @@ export function createParser (spec, options = {}) {
   // lands on the generated code rather than a method dispatch.
   // Code generation needs `new Function`, so it is off whenever eval is.
   const codegen = compile && unsafeEval
-    ? createCodegen({ planner, rules, firsts, memo, maxSteps, tokenIds, memoSlots, inlineRules, idioms })
+    ? createCodegen({ planner, rules, firsts, firsts2: ll1 ? analysis.firsts2 : null, lookahead, memo, maxSteps, tokenIds, memoSlots, inlineRules, idioms })
     : null
   const compiledStart = codegen && codegen.compile(start)
 

@@ -181,9 +181,10 @@ describe('generated code preserves the guards', () => {
     rules['r' + depth] = { consume: 'Int' }
     const spec = { tokens, rules, start: 'r0' }
     expect(createParser(spec, { memo: true, maxSteps: 100000 }).parse('7').image).toBe('7')
-    // Both branches start with the same rule, so the default memoizes it too;
-    // only with `autoMemo` off does the guard trip.
-    expect(() => createParser(spec, { autoMemo: false, maxSteps: 100000 }).parse('7')).toThrow(/maxSteps/)
+    // Both branches start with the same rule, so the default memoizes it too, and a second token of
+    // lookahead sees there is no `;` and never tries the branch that needs one. Only with both off
+    // does the guard trip.
+    expect(() => createParser(spec, { autoMemo: false, lookahead: false, maxSteps: 100000 }).parse('7')).toThrow(/maxSteps/)
     expect(createParser(spec, { maxSteps: 100000 }).parse('7').image).toBe('7')
   })
 })

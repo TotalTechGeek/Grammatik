@@ -2,7 +2,7 @@
 'use strict'
 
 import { FAIL, expect } from './state.js'
-import { buildDispatch, secondTokenMasks, opOf, recognizeSeqIdiom, recognizeAltPrefixIdiom, recognizeAltConsumeIdiom } from './analyze.js'
+import { buildDispatch, secondTokenMasks, firstOf, opOf, recognizeSeqIdiom, recognizeAltPrefixIdiom, recognizeAltConsumeIdiom } from './analyze.js'
 
 /**
  * A real source generator for grammars.
@@ -25,10 +25,10 @@ import { buildDispatch, secondTokenMasks, opOf, recognizeSeqIdiom, recognizeAltP
  * @param {{ planner: any, rules: Record<string, any>, firsts: Map<string, any>|null,
  *           memo: boolean, maxSteps: number, tokenIds?: Map<string, number>|null,
  *           memoSlots?: Map<string, number>, inlineRules?: boolean, idioms?: boolean,
- *           firsts2?: Map<string, any>|null, lookahead?: boolean }} config
+ *           firsts2?: Map<string, any>|null, lookahead?: boolean, precedence?: boolean }} config
  */
 export function createCodegen (config) {
-  const { planner, rules, firsts, memo, maxSteps, tokenIds = null, memoSlots = new Map(), inlineRules = true, idioms = true, firsts2 = null, lookahead = true } = config
+  const { planner, rules, firsts, memo, maxSteps, tokenIds = null, memoSlots = new Map(), inlineRules = true, idioms = true, firsts2 = null, lookahead = true, precedence = true } = config
 
   /**
    * `token.id === <n>` is an integer compare instead of a string compare, and
@@ -53,6 +53,10 @@ export function createCodegen (config) {
   const SOURCES = []
   const ruleIndex = new Map()
   const pending = []
+  /** Rules that are a level of a collapsed precedence tower: name -> { tower, level }. */
+  const towerOf = new Map()
+  /** Rules with no entry in the grammar, written from a function: the climber, and each level's kept original. */
+  const synthetic = new Map()
 
   let counter = 0
   const nextId = () => '_' + (counter++)
@@ -124,7 +128,7 @@ export function createCodegen (config) {
   }
   const canInline = (name) =>
     inlineRules && coldDepth === 0 && !memo && !memoSlots.has(name) && !inlining.has(name) && inlining.size < MAX_INLINE_DEPTH &&
-    callSites.get(name) === 1 && INLINE_OPS.has(opOf(rules[name]))
+    callSites.get(name) === 1 && INLINE_OPS.has(opOf(rules[name])) && !towerOf.has(name)
 
   function indexOfRule (name) {
     let index = ruleIndex.get(name)
@@ -819,14 +823,152 @@ export function createCodegen (config) {
     return genOrderedBacktrack(branches, out, bindingsVar)
   }
 
+  // ---- precedence towers ----
+  //
+  // `Comparison > Concatenation > Additive > Multiplicative > Exponent > ...` is written as a line of rules, one
+  // per level, and every operand descends the whole line and climbs back, each level peeking at the next token
+  // for an operator it will not find. Measured at about 5-6 ns per level per operand. Precedence climbing does
+  // the same job with one function: parse the innermost operand, then loop, asking which level the next token
+  // belongs to and parsing the right-hand side one level tighter.
+  //
+  // This is a rewrite of how a line is *run*, not of what it means. It applies only where the two are provably
+  // the same: every level an `infixLeft` or `infixRight` with an operator, each one's operand the next level,
+  // and no token able to start the operator of two levels. Each level's rule becomes
+  // `c.track ? original : climb`, so the tracked re-run that builds an error message executes the untouched
+  // original, and rules outside the line that call a middle level keep working.
+
+  /** @returns {{ kind: string, arg: any } | null} */
+  function infixLevel (name) {
+    const body = rules[name]
+    const kind = opOf(body)
+    if (kind !== 'infixLeft' && kind !== 'infixRight') return null
+    const arg = body[kind]
+    if (!arg || arg.operator === undefined || arg.combine === undefined || arg.operand === undefined) return null
+    return { kind, arg }
+  }
+
+  function findTowers () {
+    const next = new Map()
+    const operandOf = new Map()
+    for (const name of Object.keys(rules)) {
+      const level = infixLevel(name)
+      if (level === null || opOf(level.arg.operand) !== 'subrule') continue
+      const target = Array.isArray(level.arg.operand.subrule) ? level.arg.operand.subrule[0] : level.arg.operand.subrule
+      if (typeof target !== 'string' || target === name || infixLevel(target) === null) continue
+      next.set(name, target)
+      operandOf.set(target, (operandOf.get(target) || 0) + 1)
+    }
+    // A rule that is the operand of two levels is not part of a line. Cut the links into it.
+    for (const [name, target] of [...next]) if (operandOf.get(target) > 1) next.delete(name)
+    const targets = new Set(next.values())
+
+    for (const start of next.keys()) {
+      if (targets.has(start)) continue
+      const names = [start]
+      const seen = new Set(names)
+      for (let cur = start; next.has(cur);) {
+        cur = next.get(cur)
+        if (seen.has(cur)) break
+        seen.add(cur)
+        names.push(cur)
+      }
+      if (names.length >= 2) defineTower(names)
+    }
+  }
+
+  function defineTower (names) {
+    const levels = names.map((name) => ({ name, ...infixLevel(name) }))
+    // Which level owns each operator token. A token that can start two levels' operators, or an operator that
+    // cannot be seen through, means the line is not one this can run.
+    const ownerOf = new Map()
+    for (let i = 0; i < levels.length; i++) {
+      const first = firstOf(levels[i].arg.operator, firsts)
+      if (first.unknown || first.nullable || first.tokens.size === 0) return
+      for (const token of first.tokens) {
+        const id = tokenIds.get(token)
+        if (id === undefined || ownerOf.has(id)) return
+        ownerOf.set(id, i)
+      }
+    }
+    const climb = names[0] + '$climb'
+    if (climb in rules || names.some((name) => (name + '$tower') in rules)) return
+
+    const tower = { names, levels, ownerOf, climb }
+    synthetic.set(climb, () => climbSource(tower))
+    names.forEach((name, i) => {
+      towerOf.set(name, { tower, level: i })
+      synthetic.set(name + '$tower', () => ruleSource(name))
+      synthetic.set(name, () => `(c) => c.track ? R[${indexOfRule(name + '$tower')}](c) : R[${indexOfRule(climb)}](c, ${i})`)
+    })
+  }
+
+  /** The climber for a tower: parses level `from` and everything tighter than it. */
+  function climbSource (tower) {
+    const { levels, ownerOf, climb } = tower
+    const out = []
+    const loop = 'L' + nextId()
+    const mark = nextId()
+    const token = nextId()
+    const level = nextId()
+    const left = nextId()
+    const bindings = levels.map(() => nextId())
+    const self = indexOfRule(climb)
+
+    out.push(tickSrc)
+    const first = gen(levels[levels.length - 1].arg.operand, out, null)
+    out.push(
+      `if (${first} === F) return F;`,
+      `let ${left} = ${first};`,
+      `let ${bindings.map((b) => `${b} = null`).join(', ')};`,
+      `${loop}: for (;;) {`,
+      `const ${mark} = c.idx;`,
+      `const ${token} = c.tokens[${mark}];`,
+      `if (${token} === undefined) break;`,
+      `let ${level};`,
+      `switch (${token}.id !== undefined ? ${token}.id : I[${token}.type]) {`
+    )
+    for (let i = 0; i < levels.length; i++) {
+      const ids = [...ownerOf].filter(([, owner]) => owner === i).map(([id]) => id)
+      out.push(`${ids.map((id) => `case ${id}:`).join(' ')} ${level} = ${i}; break;`)
+    }
+    out.push(`default: break ${loop};`, '}', `if (${level} < from) break;`, `switch (${level}) {`)
+
+    levels.forEach(({ kind, arg }, i) => {
+      out.push(`case ${i}: {`)
+      const operator = gen(arg.operator, out, null)
+      const right = nextId()
+      out.push(
+        // Whatever stops a level here stops the whole expression: no other level's operator can start with this token.
+        `if (${operator} === F) { c.idx = ${mark}; break ${loop}; }`,
+        `const ${right} = R[${self}](c, ${kind === 'infixRight' ? i : i + 1});`,
+        `if (${right} === F) { c.idx = ${mark}; break ${loop}; }`,
+        `if (${bindings[i]} === null) ${bindings[i]} = { left: null, op: null, right: null };`,
+        `${bindings[i]}.left = ${left}; ${bindings[i]}.op = ${operator}; ${bindings[i]}.right = ${right};`,
+        `${left} = ${actionHelper(arg.combine)}(${bindings[i]}, c);`,
+        'break;',
+        '}'
+      )
+    })
+    out.push('}', '}')
+    return `(c, from) => {\n${out.join('\n')}\nreturn ${left};\n}`
+  }
+
+  if (precedence && firsts && tokenIds && !memo) findTowers()
+
   /** Name -> id, for a generated switch's runtime fallback when token.id is missing. */
   const idByName = tokenIds ? Object.fromEntries(tokenIds) : null
 
-  /** Generates and installs the function for one rule. */
-  function buildRule (name) {
+  /** The source of the function for a grammar rule, as written. */
+  function ruleSource (name) {
     const out = []
     const value = gen(rules[name], out, null)
-    const body = `(c) => {\n${out.join('\n')}\nreturn ${value};\n}`
+    return `(c) => {\n${out.join('\n')}\nreturn ${value};\n}`
+  }
+
+  /** Generates and installs the function for one rule. */
+  function buildRule (name) {
+    // Helper indices are allocated as the source is written, so a rule's source and its helpers stay together.
+    const body = synthetic.has(name) ? synthetic.get(name)() : ruleSource(name)
     // Kept so `emitModule` can write out exactly what was built here, with the
     // helper indices that go with it. Regenerating later would allocate fresh
     // helpers and the indices would not line up.

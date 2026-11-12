@@ -102,7 +102,7 @@ const literal = (value, indent = 0) => JSON.stringify(value, null, 2)
 
 /**
  * @param {import('./parser.js').GrammarSpec} spec
- * @param {{ memo?: boolean, autoMemo?: boolean, inlineRules?: boolean, idioms?: boolean, lookahead?: boolean, strict?: boolean, ll1?: boolean, maxSteps?: number,
+ * @param {{ memo?: boolean, autoMemo?: boolean, inlineRules?: boolean, idioms?: boolean, lookahead?: boolean, precedence?: boolean, strict?: boolean, ll1?: boolean, maxSteps?: number,
  *           positions?: 'full'|'offset', execution?: 'generated'|'interpreted',
  *           lexer?: 'generated'|'runtime', scanners?: boolean, fuse?: boolean,
  *           format?: 'esm'|'cjs', validate?: boolean, moduleName?: string,
@@ -122,6 +122,7 @@ export function emitModule (spec, options = {}) {
     inlineRules = false,
     idioms = true,
     lookahead = true,
+    precedence = true,
     strict = true,
     ll1 = true,
     maxSteps = 0,
@@ -166,7 +167,7 @@ export function emitModule (spec, options = {}) {
     : []
   const memoSlots = new Map(memoRules.map((name, slot) => [name, slot]))
   const planner = createPlanner({ engine, rules, firsts, memo, maxSteps, unsafeEval: false, tokenIds, memoSlots, idioms })
-  const codegen = createCodegen({ planner, rules, firsts, firsts2: ll1 ? analysis.firsts2 : null, lookahead, memo, maxSteps, tokenIds, memoSlots, inlineRules, idioms })
+  const codegen = createCodegen({ planner, rules, firsts, firsts2: ll1 ? analysis.firsts2 : null, lookahead, precedence, memo, maxSteps, tokenIds, memoSlots, inlineRules, idioms })
 
   codegen.compile(start)
 

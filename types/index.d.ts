@@ -100,6 +100,14 @@ export interface ParserOptions {
    * are unchanged. Default `true`; `false` tries the colliding branches in order.
    */
   lookahead?: boolean
+  /**
+   * Run a line of `infixLeft` / `infixRight` rules, one per precedence level, as one
+   * precedence-climbing function instead of a call per level per operand. Only where the
+   * result is provably the same (each level's operand the next level, no operator token
+   * shared between levels). Generated code only, and only on the first, untracked pass,
+   * so error messages are unchanged. Default `true`.
+   */
+  precedence?: boolean
   /** Require the whole token stream to be consumed. */
   strict?: boolean
   /** FIRST-set dispatch for `alt`. Off forces ordered backtracking. */

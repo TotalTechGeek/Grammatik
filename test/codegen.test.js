@@ -187,4 +187,20 @@ describe('generated code preserves the guards', () => {
     expect(() => createParser(spec, { autoMemo: false, lookahead: false, maxSteps: 100000 }).parse('7')).toThrow(/maxSteps/)
     expect(createParser(spec, { maxSteps: 100000 }).parse('7').image).toBe('7')
   })
+
+  it('records what a failed match expected only while tracking', () => {
+    // The first pass is untracked and a failed parse is repeated with tracking on to build its message, so
+    // recording expectations on the first pass is work nobody reads.
+    const spec = {
+      tokens,
+      rules: { start: { alt: [{ seq: [{ consume: 'Int' }, { consume: 'Semi' }] }, { consume: 'Int' }] } },
+      start: 'start'
+    }
+    const source = createParser(spec).codegen.sourceFor('start')
+    const recording = source.split('\n').filter((line) => line.includes('E(c'))
+    expect(recording.length).toBeGreaterThan(0)
+    for (const line of recording) expect(line, line).toMatch(/if \(c\.track\) \{ E\(c/)
+    // ...and the message it produces is unchanged.
+    expect(() => createParser(spec).parse(';')).toThrow(/Expecting Int but found/)
+  })
 })

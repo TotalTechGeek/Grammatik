@@ -137,6 +137,14 @@ export function createCodegen (config) {
   }
 
   const guard = maxSteps > 0
+
+  /**
+   * Source recording that `names` were expected here. Only the tracked re-run reads what is recorded (the first
+   * pass is untracked, and a parse that fails is repeated with tracking on to build its message), so on the
+   * first pass the calls are skipped rather than made just to be ignored.
+   */
+  const expects = (...names) => `if (c.track) { ${names.map((n) => `E(c, ${JSON.stringify(n)});`).join(' ')} }`
+
   const tickSrc = guard ? `if (++c.steps > ${maxSteps}) T();` : ''
 
   /**
@@ -165,7 +173,7 @@ export function createCodegen (config) {
           `let ${result};`,
           `const ${token} = c.tokens[c.idx];`,
           `if (${token} !== undefined && ${typeCheck(token, name)}) { c.idx++; ${result} = ${token}; }`,
-          `else { E(c, ${JSON.stringify(name)}); ${result} = F; }`
+          `else { ${expects(name)} ${result} = F; }`
         )
         return result
       }
@@ -289,7 +297,7 @@ export function createCodegen (config) {
         const names = Array.isArray(arg) ? arg : [arg]
         const token = nextId()
         const ids = tokenIds ? names.map((n) => tokenIds.get(n)) : []
-        const failed = `else { ${names.map((n) => `E(c, ${JSON.stringify(n)});`).join(' ')} ${result} = F; }`
+        const failed = `else { ${expects(...names)} ${result} = F; }`
 
         if (names.length > ONE_OF_SWITCH_AT && ids.every((id) => id !== undefined)) {
           // Past a handful of names a chain of comparisons costs more than a jump
@@ -324,7 +332,7 @@ export function createCodegen (config) {
         out.push(
           `let ${result};`,
           `if (c.idx >= c.tokens.length) ${result} = null;`,
-          `else { E(c, "end of input"); ${result} = F; }`
+          `else { ${expects('end of input')} ${result} = F; }`
         )
         return result
 
@@ -768,7 +776,7 @@ export function createCodegen (config) {
       const numeric = expectedIds !== null && expectedIds.every((id) => id !== undefined)
       const token = nextId()
       out.push(tickSrc, `let ${result};`, `${label}: {`, `const ${token} = c.tokens[c.idx];`)
-      out.push(`if (${token} === undefined) { ${expected.map((t) => `E(c, ${JSON.stringify(t)});`).join(' ')} ${result} = F; break ${label}; }`)
+      out.push(`if (${token} === undefined) { ${expects(...expected)} ${result} = F; break ${label}; }`)
 
       let discriminant
       if (numeric) {
@@ -799,7 +807,7 @@ export function createCodegen (config) {
         out.push(`${result} = ${value}; break ${label};`, '}')
       }
       out.push(
-        `default: { ${expected.map((t) => `E(c, ${JSON.stringify(t)});`).join(' ')} ${result} = F; break ${label}; }`,
+        `default: { ${expects(...expected)} ${result} = F; break ${label}; }`,
         '}',
         '}'
       )

@@ -104,7 +104,7 @@ const literal = (value, indent = 0) => JSON.stringify(value, null, 2)
  * @param {import('./parser.js').GrammarSpec} spec
  * @param {{ memo?: boolean, autoMemo?: boolean, inlineRules?: boolean, idioms?: boolean, lookahead?: boolean, precedence?: boolean, factoring?: boolean, strict?: boolean, ll1?: boolean, maxSteps?: number,
  *           positions?: 'full'|'offset', execution?: 'generated'|'interpreted',
- *           lexer?: 'generated'|'runtime', scanners?: boolean, fuse?: boolean,
+ *           lexer?: 'generated'|'runtime', scanners?: boolean, fuse?: boolean, dfa?: boolean, words?: boolean,
  *           format?: 'esm'|'cjs', validate?: boolean, moduleName?: string,
  *           runtimeSpecifier?: string, engineSpecifier?: string,
  *           methods?: Record<string, any> }} [options]
@@ -132,6 +132,8 @@ export function emitModule (spec, options = {}) {
     lexer: lexerMode = 'generated',
     scanners = true,
     fuse = true,
+    dfa = true,
+    words = true,
     format = 'esm',
     validate = true,
     moduleName = spec.name || 'parser',
@@ -285,7 +287,7 @@ const tokens = ${literal(tokenDefs)}
 
 const start = ${quote(start)}
 
-const lexer = ${generatedLexer ? generateLexer(tokenDefs, { positions, scanners, fuse }) : `createLexer(tokens, { positions: ${quote(positions)}, scanners: ${scanners}, fuse: ${fuse} })`}
+const lexer = ${generatedLexer ? generateLexer(tokenDefs, { positions, scanners, fuse, dfa, words }) : `createLexer(tokens, { positions: ${quote(positions)}, scanners: ${scanners}, fuse: ${fuse}, dfa: ${dfa}, words: ${words} })`}
 const tokenize = lexer.tokenize
 
 ${engineFree

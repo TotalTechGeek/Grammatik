@@ -2,7 +2,9 @@
 'use strict'
 
 import { firstCharSet } from './firstchars.js'
-import { buildScanner, mayContainNewline, scanEnd, DEFER } from './scan.js'
+import { buildScanner, mayContainNewline, scanEnd, DEFER, SCANNER_KINDS } from './scan.js'
+import { parseToken, parseRelaxed, isDeterministic, buildDfa, loopedLookahead, symbolOf, SYM, BOS } from './dfa.js'
+import { analyzeWords } from './words.js'
 import { LexError } from './state.js'
 
 /**
@@ -99,6 +101,8 @@ export function createLexer (defs, options = {}) {
   const trackLines = positions === 'full'
   const useScanners = options.scanners !== false
   const useFuse = options.fuse !== false
+  const useDfa = options.dfa !== false
+  const useWords = options.words !== false
   if (!Array.isArray(defs) || defs.length === 0) throw new Error('createLexer: expected a non-empty array of token definitions')
 
   const tokenNames = defs.map((d) => d.name)
@@ -163,9 +167,35 @@ export function createLexer (defs, options = {}) {
       // cannot skips the newline count in `full` mode.
       mayNewline: true,
       // Set only on the stand-in `fuse` builds for a run of regexes; see there.
-      members: null
+      members: null,
+      // The pattern, parsed, when it is inside what dfa.js understands, else null; whether its longest accepted
+      // prefix is the end its regex reports; and, on a stand-in for a DFA group only, that group.
+      parsed: null,
+      exact: false,
+      filter: false,
+      dfa: null,
+      word: null
     }
   })
+  if (useDfa) {
+    for (const c of compiled) {
+      const def = defs[c.id]
+      if (!def.pattern) continue
+      let token = parseToken(def.pattern, !!def.ignoreCase)
+      if (token === null) {
+        // Not modelled exactly (an unbounded lookahead, say), but its pattern without those assertions can still say that it
+        // certainly does not match here, which saves the regex call.
+        token = parseRelaxed(def.pattern, !!def.ignoreCase)
+        if (token === null) continue
+        c.filter = true
+      }
+      // A lookahead in every iteration of a loop makes the automaton report a delayed match at every character, which
+      // costs more than the regex engine does for it: measured on Handlebars' names, the walk was 9% slower overall.
+      if (loopedLookahead(token.tree)) { c.filter = false; continue }
+      c.parsed = token
+      c.exact = !c.filter && isDeterministic(token.tree)
+    }
+  }
   for (const c of compiled) c.mayNewline = mayContainNewline(c)
 
   const byName = new Map(compiled.map((c) => [c.name, c]))
@@ -250,11 +280,428 @@ export function createLexer (defs, options = {}) {
         pushMode: -1,
         popMode: false,
         mayNewline: true,
-        members: run
+        members: run,
+        parsed: null,
+        exact: false,
+        filter: false,
+        dfa: null,
+        word: null
       })
       i = j
     }
     return out
+  }
+
+  // ---- DFA groups ----
+  // Tokens that share a first character are tried one after another, and each rejected attempt re-reads the same
+  // characters (see dfa.js). Consecutive candidates the DFA module understands are replaced, in the list for one
+  // first character, by one stand-in that walks the text once. `dfaGroups` runs before `fuse`, and a stand-in has no
+  // regex, so `fuse` leaves it alone.
+  const DFA_MIN = 2
+  const groupCache = new Map()
+
+  function groupFor (run) {
+    const key = run.map((d) => d.id).join(',')
+    let group = groupCache.get(key)
+    if (group === undefined) {
+      // The tables are built the first time the group is walked, not here: a lexer has a candidate list for every
+      // first character, and most grammars only ever reach a few of their groups.
+      group = {
+        trans: null,
+        accepts: null,
+        best: null,
+        hasLate: false,
+        lateStart: null,
+        lateData: null,
+        hasEos: false,
+        eosStart: null,
+        eosData: null,
+        hasCtx: false,
+        starts: null,
+        start: 0,
+        prefixFree: null,
+        T: run.length,
+        members: run,
+        exact: new Uint8Array(run.length),
+        ready: false,
+        // A filter group holds patterns the automaton only over-approximates (see `parseRelaxed`): its walk says which of them
+        // might match, and each of those is then asked for real. It watches how often it rules anything out, and gives up
+        // when that is too seldom to pay for the walk.
+        filter: run[0].filter,
+        calls: 0,
+        passes: 0,
+        off: false,
+        accepting: null,
+        // The DFA would have too many states: the members are tried one after another instead.
+        broken: false,
+        standIn: {
+          name: run.map((d) => d.name).join('~'),
+          id: -1,
+          skip: false,
+          literal: undefined,
+          longerAlt: null,
+          longerAltDef: undefined,
+          regex: null,
+          scanner: null,
+          modes: run[0].modes,
+          pushMode: -1,
+          popMode: false,
+          mayNewline: true,
+          members: null,
+          parsed: null,
+          exact: false,
+          filter: false,
+          dfa: null,
+          word: null
+        }
+      }
+      group.standIn.dfa = group
+      groupCache.set(key, group)
+    }
+    return group
+  }
+
+  function prepare (group) {
+    const dfa = buildDfa(group.members.map((d) => d.parsed))
+    if (dfa === null || (group.filter && group.members.length > 31)) {
+      group.broken = true
+    } else {
+      Object.assign(group, dfa)
+      // A pattern's end is the DFA's when it has no choice to make or can end in only one place.
+      group.members.forEach((d, k) => { group.exact[k] = d.exact || dfa.prefixFree[k] === 1 ? 1 : 0 })
+      if (group.filter) {
+        // Which patterns may end right here, as one number per state.
+        const states = dfa.trans.length / SYM
+        group.accepting = new Int32Array(states)
+        for (let q = 1; q < states; q++) for (let t = 0; t < dfa.T; t++) if (dfa.accepts[q * dfa.T + t] === 1) group.accepting[q] |= 1 << t
+      }
+    }
+    group.ready = true
+  }
+
+  // ---- keyword groups ----
+  // `SELECT(?![A-Za-z0-9_])`, `FROM(?![A-Za-z0-9_])`, ... and then an identifier: every word in the text is tried against
+  // each keyword in turn before the identifier wins. When each keyword's lookahead is exactly the identifier's own
+  // character class, a keyword matches precisely when the identifier's whole run equals its word. So the run is
+  // scanned once, hashed as it goes, and looked up; the lowest-numbered keyword that equals it wins, and if none does
+  // the identifier does. Same tokens, in one pass and with nothing allocated.
+  /** The group a run of [keywords..., word token] makes, or null when it is not one this can stand in for. */
+  function wordGroup (run) {
+    const found = analyzeWords(run, (d) => d.regex.ignoreCase)
+    if (found === null) return null
+    // An open-addressing table over each word's hash, probed linearly.
+    let size = 16
+    while (size < found.entries.length * 4) size *= 2
+    const slots = new Int16Array(size)
+    const hashes = new Int32Array(size)
+    for (const { index, hash } of found.entries) {
+      let slot = hash & (size - 1)
+      while (slots[slot] !== 0) slot = (slot + 1) & (size - 1)
+      slots[slot] = index + 1
+      hashes[slot] = hash
+    }
+    return {
+      keywords: found.keywords, word: found.word, first: found.first, rest: found.rest, look: found.look, extend: found.extend, fold: found.fold, slots, hashes, mask: size - 1,
+      standIn: {
+        name: run.map((d) => d.name).join('~'), id: -1, skip: false, literal: undefined, longerAlt: null, longerAltDef: undefined,
+        regex: null, scanner: null, modes: run[0].modes, pushMode: -1, popMode: false, mayNewline: true, members: null,
+        parsed: null, exact: false, filter: false, dfa: null, word: null
+      }
+    }
+  }
+
+  const wordCache = new Map()
+  function wordGroupFor (run) {
+    const key = run.map((d) => d.id).join(',')
+    let group = wordCache.get(key)
+    if (group === undefined) {
+      group = wordGroup(run)
+      if (group !== null) group.standIn.word = group
+      wordCache.set(key, group)
+    }
+    return group
+  }
+
+  /** The member of a keyword group that matched, set by `wordEnd`. */
+  let wordMember = null
+
+  /** The general scan: the identifier may go on past the run of the keywords' lookahead class, or start outside it. */
+  function wordEndExtended (group, text, offset, length) {
+    const c0 = text.charCodeAt(offset)
+    if (c0 >= 128 || group.first[c0] !== 1) return -1
+    const look = group.look
+    const fold = group.fold
+    // The run of the keywords' lookahead class from here: a keyword matches exactly when it is the whole of this.
+    let h = 0
+    let j = offset
+    while (j < length) {
+      let c = text.charCodeAt(j)
+      if (c >= 128 || look[c] !== 1) break
+      if (fold && c >= 65 && c <= 90) c += 32
+      h = (Math.imul(h, 31) + c) | 0
+      j++
+    }
+    const len = j - offset
+    if (len > 0) {
+      const slots = group.slots
+      const mask = group.mask
+      for (let slot = h & mask; slots[slot] !== 0; slot = (slot + 1) & mask) {
+        if (group.hashes[slot] !== h) continue
+        const keyword = group.keywords[slots[slot] - 1]
+        const { lower, upper } = keyword.scanner
+        if (lower.length !== len) continue
+        let n = 0
+        while (n < len) {
+          const c = text.charCodeAt(offset + n)
+          if (c !== lower[n] && c !== upper[n]) break
+          n++
+        }
+        if (n === len) {
+          wordMember = keyword
+          return j
+        }
+      }
+    }
+    // The identifier, which may go on past where the run ended (its continue-set is the larger) or start where the run could not.
+    if (group.extend) {
+      if (j === offset) j++ // its first character is in its start-set, not necessarily in the lookahead class
+      const rest = group.rest
+      while (j < length) {
+        const c = text.charCodeAt(j)
+        if (c >= 128 || rest[c] !== 1) break
+        j++
+      }
+    }
+    wordMember = group.word
+    return j
+  }
+
+  /** When the keywords' lookahead class is the identifier's own continue-set, its run is the identifier, and nothing is left to scan. */
+  function wordEndSame (group, text, offset, length) {
+    const c0 = text.charCodeAt(offset)
+    if (c0 >= 128 || group.first[c0] !== 1) return -1
+    const rest = group.rest
+    const fold = group.fold
+    let h = fold && c0 >= 65 && c0 <= 90 ? c0 + 32 : c0
+    let j = offset + 1
+    while (j < length) {
+      let c = text.charCodeAt(j)
+      if (c >= 128 || rest[c] !== 1) break
+      if (fold && c >= 65 && c <= 90) c += 32
+      h = (Math.imul(h, 31) + c) | 0
+      j++
+    }
+    const len = j - offset
+    const slots = group.slots
+    const mask = group.mask
+    for (let slot = h & mask; slots[slot] !== 0; slot = (slot + 1) & mask) {
+      if (group.hashes[slot] !== h) continue
+      const keyword = group.keywords[slots[slot] - 1]
+      const { lower, upper } = keyword.scanner
+      if (lower.length !== len) continue
+      let n = 0
+      while (n < len) {
+        const c = text.charCodeAt(offset + n)
+        if (c !== lower[n] && c !== upper[n]) break
+        n++
+      }
+      if (n === len) {
+        wordMember = keyword
+        return j
+      }
+    }
+    wordMember = group.word
+    return j
+  }
+
+  function wordEnd (group, text, offset, length) {
+    return group.extend ? wordEndExtended(group, text, offset, length) : wordEndSame(group, text, offset, length)
+  }
+
+  function dfaGroups (list) {
+    if (!useDfa) return list
+    const out = []
+    for (let i = 0; i < list.length;) {
+      let j = i
+      while (j < list.length && list[j].parsed !== null && list[j].literal === undefined && list[j].members === null && list[j].filter === list[i].filter) j++
+      // A keyword run followed by the identifier that would otherwise beat them all is cheaper as scan-and-look-up.
+      let w = i
+      while (w < list.length && list[w].members === null && list[w].dfa === null && list[w].word === null && list[w].scanner !== null && list[w].scanner.kind === SCANNER_KINDS.KEYWORD) w++
+      if (useWords && w > i && w < list.length && list[w].members === null) {
+        const group = wordGroupFor(list.slice(i, w + 1))
+        if (group !== null) {
+          out.push(group.standIn)
+          i = w + 1
+          continue
+        }
+      }
+      // A lone token is worth a DFA only when its alternative is a regex call; a hand-written scanner is as quick.
+      const worth = list[i].filter || j - i >= DFA_MIN || (j - i === 1 && list[i].scanner === null)
+      if (!worth) {
+        out.push(list[i++])
+        continue
+      }
+      out.push(groupFor(list.slice(i, j)).standIn)
+      i = j
+    }
+    return out
+  }
+
+  /** The member of a DFA group that matched, set by `dfaEnd`. */
+  let dfaMember = null
+
+  /** Where one definition's own matcher ends at `offset`, or -1. A zero-length match is no match. */
+  function ownEnd (def, text, offset, length) {
+    const end = def.scanner === null ? DEFER : scanEnd(def.scanner, text, offset, length)
+    if (end !== DEFER) return end
+    def.regex.lastIndex = offset
+    if (def.skip) return def.regex.test(text) && def.regex.lastIndex > offset ? def.regex.lastIndex : -1
+    const match = def.regex.exec(text)
+    return match !== null && match[0].length > 0 ? offset + match[0].length : -1
+  }
+
+  /**
+   * A filter group: one walk finds which of its patterns may match here, and only those are asked, in order, for their own
+   * answer. A pattern the walk rules out cannot match; one it lets through may still not.
+   */
+  function filterEnd (group, text, offset, length) {
+    const { trans, accepting } = group
+    let state = group.hasCtx ? group.starts[offset === 0 ? BOS : symbolOf(text.charCodeAt(offset - 1))] : group.start
+    let mask = 0
+    let dead = false
+    for (let i = offset; i < length;) {
+      const c = text.charCodeAt(i)
+      const before = state
+      state = trans[state * SYM + (c < 128 ? c : symbolOf(c))]
+      if (state === 0) { dead = true; break }
+      i++
+      if (state === before) {
+        const row = state * SYM
+        while (i < length) {
+          const d = text.charCodeAt(i)
+          if (trans[row + (d < 128 ? d : symbolOf(d))] !== state) break
+          i++
+        }
+      }
+      mask |= accepting[state]
+      if (group.hasLate) {
+        const data = group.lateData
+        for (let k = group.lateStart[state]; k < group.lateStart[state + 1]; k += 2) if (i - data[k + 1] > offset) mask |= 1 << data[k]
+      }
+    }
+    if (!dead && group.hasEos) {
+      const data = group.eosData
+      for (let k = group.eosStart[state]; k < group.eosStart[state + 1]; k += 2) if (length - data[k + 1] > offset) mask |= 1 << data[k]
+    }
+    if (++group.calls === 64 && group.passes * 10 > 64 * 7) group.off = true // it rules out under a third: not worth the walk
+    if (mask === 0) return -1
+    if (group.calls <= 64) group.passes++
+    for (let t = 0; t < group.members.length; t++) {
+      if ((mask & (1 << t)) === 0) continue
+      const member = group.members[t]
+      const own = ownEnd(member, text, offset, length)
+      if (own !== -1) {
+        dfaMember = member
+        return own
+      }
+    }
+    return -1
+  }
+
+  /**
+   * Where a DFA group matches at `offset`, or -1, leaving the winning member in `dfaMember`. One walk of the text
+   * finds the first member (in declaration order) that accepts any non-empty prefix, and the last position at which
+   * that member accepted. For a member whose pattern is not deterministic that position is not necessarily where its
+   * regex ends, so its own matcher decides, and should it find nothing the later members are tried in turn.
+   */
+  function dfaEnd (group, text, offset, length) {
+    if (!group.ready) prepare(group)
+    if (group.filter && !group.broken && !group.off) return filterEnd(group, text, offset, length)
+    if (group.broken || group.off) {
+      for (const member of group.members) {
+        const own = ownEnd(member, text, offset, length)
+        if (own !== -1) {
+          dfaMember = member
+          return own
+        }
+      }
+      return -1
+    }
+    const { trans, accepts, best, T } = group
+    let state = group.hasCtx ? group.starts[offset === 0 ? BOS : symbolOf(text.charCodeAt(offset - 1))] : group.start
+    let winner = -1
+    let end = -1
+    let dead = false
+    for (let i = offset; i < length;) {
+      const c = text.charCodeAt(i)
+      const before = state
+      state = trans[state * SYM + (c < 128 ? c : symbolOf(c))]
+      if (state === 0) { dead = true; break }
+      i++
+      if (state === before) {
+        // A run inside one state (the letters of a name, the body of a string): what the state reports is the same at every
+        // turn and only the last end counts, so skip the reporting until the run is over.
+        const row = state * SYM
+        while (i < length) {
+          const d = text.charCodeAt(i)
+          if (trans[row + (d < 128 ? d : symbolOf(d))] !== state) break
+          i++
+        }
+      }
+      const b = best[state]
+      if (b !== -1) {
+        if (winner === -1 || b < winner) {
+          winner = b
+          end = i
+        } else if (accepts[state * T + winner] === 1) {
+          end = i
+        }
+      }
+      if (group.hasLate) {
+        // A lookahead that resolved just now says its pattern ended `delay` characters ago.
+        const data = group.lateData
+        for (let k = group.lateStart[state]; k < group.lateStart[state + 1]; k += 2) {
+          const e = i - data[k + 1]
+          if (e <= offset) continue
+          const t = data[k]
+          if (winner === -1 || t < winner) {
+            winner = t
+            end = e
+          } else if (t === winner && e > end) {
+            end = e
+          }
+        }
+      }
+    }
+    if (!dead && group.hasEos) {
+      // The text ended with nothing to contradict what is still waiting on a lookahead, or `$` matched.
+      const data = group.eosData
+      for (let k = group.eosStart[state]; k < group.eosStart[state + 1]; k += 2) {
+        const e = length - data[k + 1]
+        if (e <= offset) continue
+        const t = data[k]
+        if (winner === -1 || t < winner) {
+          winner = t
+          end = e
+        } else if (t === winner && e > end) {
+          end = e
+        }
+      }
+    }
+    if (winner === -1) return -1
+    if (group.exact[winner] === 1) {
+      dfaMember = group.members[winner]
+      return end
+    }
+    for (let w = winner; w < group.members.length; w++) {
+      const member = group.members[w]
+      const own = ownEnd(member, text, offset, length)
+      if (own !== -1) {
+        dfaMember = member
+        return own
+      }
+    }
+    return -1
   }
 
   const modes = modeNames.map((name, id) => {
@@ -262,7 +709,7 @@ export function createLexer (defs, options = {}) {
     // Definitions whose first characters could not be determined must be tried
     // at every offset, so they belong in every bucket.
     const alwaysTry = members.filter((c) => c.firstChars === null)
-    const candidatesFor = (code) => fuse(members.filter((c) => c.firstChars === null || c.firstChars.has(code)))
+    const candidatesFor = (code) => fuse(dfaGroups(members.filter((c) => c.firstChars === null || c.firstChars.has(code))))
 
     const ascii = new Array(128)
     for (let code = 0; code < 128; code++) ascii[code] = candidatesFor(code)
@@ -383,6 +830,14 @@ export function createLexer (defs, options = {}) {
           if (end === -1) continue
           def = fusedMember
           matched = fusedText
+        } else if (def.dfa !== null) {
+          end = dfaEnd(def.dfa, text, offset, length)
+          if (end === -1) continue
+          def = dfaMember
+        } else if (def.word !== null) {
+          end = wordEnd(def.word, text, offset, length)
+          if (end === -1) continue
+          def = wordMember
         } else if (def.literal !== undefined) {
           if (text.startsWith(def.literal, offset)) end = offset + def.literal.length
         } else {
@@ -557,6 +1012,14 @@ export function createLexer (defs, options = {}) {
           if (end === -1) continue
           def = fusedMember
           matched = fusedText
+        } else if (def.dfa !== null) {
+          end = dfaEnd(def.dfa, text, offset, length)
+          if (end === -1) continue
+          def = dfaMember
+        } else if (def.word !== null) {
+          end = wordEnd(def.word, text, offset, length)
+          if (end === -1) continue
+          def = wordMember
         } else if (def.literal !== undefined) {
           if (text.startsWith(def.literal, offset)) end = offset + def.literal.length
         } else {

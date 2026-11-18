@@ -267,10 +267,25 @@ describe('what the generated source contains', () => {
     const jsonSource = generateLexer(json.tokens, { positions: 'offset' })
     expect(jsonSource).not.toContain('scanKeyword')       // JSON has no keyword tokens
     expect(jsonSource).toContain('skipDigits')            // but it has numbers
-    const sqlSource = generateLexer(load('sql.gram'), { positions: 'offset' })
+    const sqlSource = generateLexer(load('sql.gram'), { positions: 'offset', dfa: false, words: false })
     expect(sqlSource).toContain('scanKeyword')
     expect(sqlSource).toContain('skipDigits')             // SQL's decimals are a number scanner too
+  })
 
+  it('writes a DFA function per group only where a group replaces regex calls', () => {
+    // The formula's cell references and numbers are regexes that compete with its identifiers for a first character.
+    const formula = generateLexer(load('formula.gram'), { positions: 'offset' })
+    expect(formula).toMatch(/function dfa\d+ \(/)
+    expect(generateLexer(load('formula.gram'), { positions: 'offset', dfa: false })).not.toMatch(/function dfa\d+ \(/)
+    // SQL's keywords and identifiers all have hand-written scanners, which are quicker unrolled than walked; they are
+    // handled as a keyword group instead (scan the word once, look it up).
+    const sql = generateLexer(load('sql.gram'), { positions: 'offset' })
+    expect(sql).not.toMatch(/function dfa\d+ \(/)
+    expect(sql).toMatch(/function word\d+ \(/)
+    expect(sql).not.toContain('scanKeyword')
+    expect(generateLexer(load('sql.gram'), { positions: 'offset', words: false })).toContain('scanKeyword')
+    // JSON's tokens never compete for a first character, so there is nothing to group.
+    expect(generateLexer(json.tokens, { positions: 'offset' })).not.toMatch(/function dfa\d+ \(/)
   })
 
   it('writes each helper once, however many candidate lists a token is in', () => {

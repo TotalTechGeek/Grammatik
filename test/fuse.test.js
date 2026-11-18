@@ -71,8 +71,9 @@ describe('fuse: lookaround-heavy openers in lexer modes', () => {
 
   it('actually fuses them: far fewer regex calls', () => {
     const text = Array.from({ length: 30 }, () => '{{name}} and {{other}}').join(' ')
-    const fused = regexCalls(tags, text, {})
-    const plain = regexCalls(tags, text, { fuse: false })
+    // `fuse` on its own: the DFA path would take some of these regexes out of the count in both runs.
+    const fused = regexCalls(tags, text, { dfa: false, words: false })
+    const plain = regexCalls(tags, text, { dfa: false, words: false, fuse: false })
     expect(fused).toBeLessThan(plain * 0.6)
   })
 

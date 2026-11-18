@@ -1,6 +1,6 @@
 {
   "name": "grammatik",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "A parser toolkit whose grammars are data: tokens, rules and semantic actions all serializable, compiled ahead of time.",
   "type": "module",
   "main": "./dist/cjs/index.js",
